@@ -658,28 +658,24 @@ class MainWindow(QMainWindow):
             # --- Регистрация шрифта с поддержкой кириллицы ---
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
-            from reportlab.lib.fonts import addMapping
             from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-            from reportlab.lib.enums import TA_CENTER, TA_LEFT
+            from reportlab.lib.enums import TA_CENTER
             from reportlab.lib import colors
             from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
             from reportlab.lib.pagesizes import A4
 
-            # Регистрируем шрифт Arial (есть в любой Windows)
-            # Если система английская, может называться "arial.ttf". 
-            # Можно также указать полный путь, но reportlab сам ищет в системных папках.
+            # Регистрируем шрифт Arial
             pdfmetrics.registerFont(TTFont('Arial', 'arial.ttf'))
 
-            # Создаем документ
             doc = SimpleDocTemplate(file_path, pagesize=A4)
             elements = []
             styles = getSampleStyleSheet()
 
-            # Переназначаем все стандартные стили на наш шрифт Arial
+            # Устанавливаем Arial для всех стандартных стилей
             for style_name in styles.byName:
                 styles[style_name].fontName = 'Arial'
 
-            # Можно создать свой стиль для заголовков, если нужно
+            # Стиль для заголовка
             title_style = ParagraphStyle(
                 'CustomTitle',
                 parent=styles['Heading1'],
@@ -690,47 +686,36 @@ class MainWindow(QMainWindow):
                 textColor=colors.HexColor('#2c3e50')
             )
 
-            # --- Заголовок отчета ---
-            title = Paragraph("БУХГАЛТЕРСКИЙ ОТЧЕТ BUHTUUNDOTCHET", title_style)
-            elements.append(title)
+            # --- Заголовок ---
+            elements.append(Paragraph("БУХГАЛТЕРСКИЙ ОТЧЕТ BUHTUUNDOTCHET", title_style))
 
-            # --- Информационная строка ---
-            info_style = ParagraphStyle(
-                'InfoStyle',
-                parent=styles['Normal'],
-                fontName='Arial',
-                fontSize=10,
-                textColor=colors.grey
-            )
+            # --- Информация ---
             info_text = f"Дата формирования: {datetime.now().strftime('%d.%m.%Y %H:%M')} | Записей: {len(self.current_df)}"
-            elements.append(Paragraph(info_text, info_style))
+            elements.append(Paragraph(info_text, styles['Normal']))
             elements.append(Spacer(1, 20))
 
-            # --- Итоговые показатели ---
+            # --- Итоговые показатели (каждый отдельным абзацем) ---
             total_revenue = self.current_df['revenue'].sum()
             total_vat = self.current_df['vat_to_budget'].sum()
             total_profit = self.current_df['net_profit'].sum()
 
-            totals_text = f"""
-            <para><b>ИТОГОВЫЕ ПОКАЗАТЕЛИ:</b></para>
-            <para>Общая выручка: {total_revenue:,.0f} ₽</para>
-            <para>НДС к уплате в бюджет: {total_vat:,.0f} ₽</para>
-            <para>Общая чистая прибыль: {total_profit:,.0f} ₽</para>
-            """
-            elements.append(Paragraph(totals_text, styles['Normal']))
+            elements.append(Paragraph("<b>ИТОГОВЫЕ ПОКАЗАТЕЛИ:</b>", styles['Heading2']))
+            elements.append(Spacer(1, 6))
+            elements.append(Paragraph(f"Общая выручка: {total_revenue:,.0f} ₽", styles['Normal']))
+            elements.append(Paragraph(f"НДС к уплате в бюджет: {total_vat:,.0f} ₽", styles['Normal']))
+            elements.append(Paragraph(f"Общая чистая прибыль: {total_profit:,.0f} ₽", styles['Normal']))
             elements.append(Spacer(1, 20))
 
-            # --- График (сохраняем во временный файл) ---
+            # --- График ---
             chart_path = "temp_chart.png"
             self.figure.savefig(chart_path, format='png', dpi=150, bbox_inches='tight')
             elements.append(Paragraph("Визуализация данных:", styles['Heading2']))
             elements.append(Image(chart_path, width=400, height=300))
             elements.append(Spacer(1, 20))
 
-            # --- Таблица с данными (первые 20 строк) ---
+            # --- Таблица (первые 20 строк) ---
             elements.append(Paragraph("Данные отчета (первые 20 записей):", styles['Heading2']))
 
-            # Подготовка данных для таблицы
             table_data = [['Период', 'Компания', 'Товар', 'Выручка', 'НДС к уплате', 'Прибыль']]
             for _, row in self.current_df.head(20).iterrows():
                 table_data.append([
@@ -742,21 +727,19 @@ class MainWindow(QMainWindow):
                     f"{row.get('net_profit', 0):,.0f} ₽".replace(",", " ")
                 ])
 
-            # Создаем таблицу и применяем стили (шрифт Arial уже установлен в стилях по умолчанию, но для ячеек тоже надо)
             table = Table(table_data)
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Arial'),          # заголовки жирные
+                ('FONTNAME', (0, 0), (-1, 0), 'Arial'),
                 ('FONTSIZE', (0, 0), (-1, 0), 10),
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
                 ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
                 ('GRID', (0, 0), (-1, -1), 1, colors.black),
                 ('FONTSIZE', (0, 1), (-1, -1), 8),
-                ('FONTNAME', (0, 1), (-1, -1), 'Arial'),         # данные тоже Arial
+                ('FONTNAME', (0, 1), (-1, -1), 'Arial'),
             ]))
-
             elements.append(table)
             elements.append(Spacer(1, 20))
 
@@ -774,7 +757,7 @@ class MainWindow(QMainWindow):
             # Генерация PDF
             doc.build(elements)
 
-            # Удаление временного файла графика
+            # Удаление временного файла
             if os.path.exists(chart_path):
                 os.remove(chart_path)
 
@@ -909,7 +892,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v1.0.0</p>
+        <p><b>Версия программы:</b> v1.1.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
