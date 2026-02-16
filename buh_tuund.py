@@ -766,6 +766,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при экспорте в PDF: {str(e)}")
     
+    
+    
     def export_to_word(self):
         """Экспорт отчета в Word"""
         if self.current_df is None or self.current_df.empty:
