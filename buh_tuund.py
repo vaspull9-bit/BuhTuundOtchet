@@ -456,12 +456,12 @@ class MainWindow(QMainWindow):
         self.update_charts()
 
     def load_files(self):
-        """Загрузка нескольких выбранных файлов Excel"""
         file_paths, _ = QFileDialog.getOpenFileNames(
             self, "Выберите файлы Excel", "", "Excel Files (*.xlsx *.xls)"
         )
         if file_paths:
             self.process_files(file_paths)
+
 
     def load_folder(self):
         """Загрузка всех Excel-файлов из выбранной папки и её подпапок"""
@@ -482,12 +482,10 @@ class MainWindow(QMainWindow):
         self.process_files(excel_files)
 
     def process_files(self, file_paths):
-        """Обработка списка файлов с индикацией прогресса"""
         total = len(file_paths)
         if total == 0:
             return
 
-        # Прогресс-бар
         progress = QProgressDialog("Загрузка файлов...", "Отмена", 0, total, self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
 
@@ -501,16 +499,26 @@ class MainWindow(QMainWindow):
             progress.setLabelText(f"Обработка: {os.path.basename(file_path)}")
 
             try:
-                # Вызываем существующий метод загрузки одного файла
-                # (с небольшими изменениями – он должен принимать file_path и не спрашивать диалог)
-                self.load_single_excel(file_path)
-                success_count += 1
+                saved = self._test_parse_purchase_ledger(file_path)
+                if saved > 0:
+                    success_count += 1
+                # Если saved == 0, файл просто не подошёл – это не ошибка
             except Exception as e:
                 error_files.append(f"{os.path.basename(file_path)}: {str(e)}")
 
         progress.setValue(total)
 
-        # Итоговое сообщение
+        # Обновляем отображение только если есть новые записи
+        if success_count > 0:
+            self.current_df = self.db.get_all_data()
+            self.display_data(self.current_df)
+            self.update_totals()
+            # Защита от NaN в графиках
+            try:
+                self.update_charts()
+            except Exception as e:
+                print(f"Ошибка при обновлении графиков: {e}")
+
         msg = f"Успешно загружено: {success_count} из {total}"
         if error_files:
             msg += "\n\nОшибки:\n" + "\n".join(error_files[:5])
@@ -520,8 +528,7 @@ class MainWindow(QMainWindow):
 
     def _import_excel_file(self, file_path):
         """
-        Универсальный импорт: определяет тип файла и вызывает соответствующий парсер.
-        Возвращает количество сохраненных записей.
+        Универсальный импорт: определяет тип файла по первым строкам и вызывает нужный парсер.
         """
         # Проверка xlrd для .xls
         if file_path.lower().endswith('.xls'):
@@ -530,15 +537,31 @@ class MainWindow(QMainWindow):
             except ImportError:
                 raise ImportError("Для чтения файлов .xls установите xlrd: pip install xlrd")
 
-        # Читаем первые несколько строк для анализа (без заголовков)
-        df_preview = pd.read_excel(file_path, nrows=10, header=None)
-        preview_text = ' '.join(df_preview.astype(str).values.flatten().tolist()).lower()
+        # --- Безопасное чтение первых 5 строк для анализа ---
+        try:
+            # Пытаемся прочитать с явным указанием dtype=str (может не сработать в старых версиях pandas)
+            df_preview = pd.read_excel(file_path, nrows=5, header=None, dtype=str)
+        except Exception:
+            # Если не получилось, читаем без dtype и потом преобразуем всё в строки
+            df_preview = pd.read_excel(file_path, nrows=5, header=None)
+            df_preview = df_preview.astype(str)
+
+        df_preview = df_preview.fillna('')  # заменяем NaN на пустую строку
+
+        # Ручное преобразование каждой ячейки в строку и сбор в одну строку
+        preview_items = []
+        for _, row in df_preview.iterrows():
+            for cell in row:
+                preview_items.append(str(cell))
+        preview_text = ' '.join(preview_items).lower()
+        # ----------------------------------------------------
 
         # Определение типа файла
         if 'оборотно-сальдовая ведомость по счету 19' in preview_text:
             return self._parse_osv_19(file_path)
         elif 'книга покупок' in preview_text:
-            return self._parse_purchase_ledger(file_path)
+            # Временно используем тестовый метод для отладки
+            return self._test_parse_purchase_ledger(file_path)
         elif 'книга продаж' in preview_text:
             return self._parse_sales_ledger(file_path)
         elif 'оборотно-сальдовая ведомость по счету 41' in preview_text:
@@ -555,7 +578,92 @@ class MainWindow(QMainWindow):
             # Если не распознали – пробуем как сводный шаблон
             return self._import_legacy(file_path)
         
+    # Тестовый метод вместо _parse_purchase_ledger для книги покупок
+    def _test_parse_purchase_ledger(self, file_path):
+        df = pd.read_excel(file_path, header=None)
 
+        # Извлекаем компанию
+        company = "Неизвестно"
+        for i in range(5):
+            row = df.iloc[i]
+            for j, cell in enumerate(row):
+                if isinstance(cell, str) and 'покупатель' in cell.lower():
+                    if len(row) > j+1 and not pd.isna(row[j+1]):
+                        company = str(row[j+1]).strip()
+                        break
+            if company != "Неизвестно":
+                break
+
+        # Извлекаем период (последний месяц квартала)
+        period = "03.2025"
+        for i in range(5):
+            row = df.iloc[i]
+            for cell in row:
+                if isinstance(cell, str) and 'период с' in cell.lower():
+                    import re
+                    match = re.search(r'(\d{2})\.(\d{2})\.(\d{4})', cell)
+                    if match:
+                        day, month, year = match.groups()
+                        period = f"{month}.{year}"
+                        break
+            if period != "03.2025":
+                break
+
+        # Поиск итоговой строки (содержит "Всего" в первом столбце)
+        total_row = None
+        for i in range(len(df)-1, max(0, len(df)-50), -1):
+            cell_val = df.iloc[i, 0] if df.shape[1] > 0 else ''
+            if pd.isna(cell_val):
+                continue
+            if 'всего' in str(cell_val).lower():
+                total_row = df.iloc[i]
+                break
+
+        if total_row is None:
+            print(f"Файл {os.path.basename(file_path)} не является книгой покупок (нет 'Всего'), пропускаем.")
+            return 0
+
+        # Сумма НДС в колонке 59
+        vat_sum = 0.0
+        if len(total_row) > 59:
+            vat_val = total_row[59]
+            vat_sum = self._clean_number(vat_val)
+            print(f"Сумма НДС из колонки 59: {vat_sum}")
+        else:
+            # Запасные варианты
+            for col in [14, 18, 58, 60]:
+                if len(total_row) > col:
+                    vat_val = total_row[col]
+                    vat_sum = self._clean_number(vat_val)
+                    if vat_sum != 0.0:
+                        print(f"Нашли сумму в колонке {col}: {vat_sum}")
+                        break
+
+        if vat_sum == 0.0 or pd.isna(vat_sum):
+            print(f"Файл {os.path.basename(file_path)}: сумма НДС не найдена, пропускаем.")
+            return 0
+
+        # Формируем запись с явным приведением типов
+        data_row = {
+            'period': str(period),
+            'company': str(company),
+            'product_group': 'НДС к вычету',
+            'nomenclature': 'Книга покупок',
+            'revenue': 0.0,
+            'vat_in_revenue': 0.0,
+            'cost_price': 0.0,
+            'gross_profit': 0.0,
+            'sales_expenses': 0.0,
+            'other_income_expenses': 0.0,
+            'net_profit': 0.0,
+            'vat_deductible': float(vat_sum),
+            'vat_to_budget': 0.0,
+            'quantity': 0
+        }
+
+        df_result = pd.DataFrame([data_row])
+        saved = self.db.save_data(df_result)
+        return saved
 
         # ---------- Вспомогательные методы ----------
     def _extract_company_from_text(self, text):
@@ -600,17 +708,24 @@ class MainWindow(QMainWindow):
         return "01.2026"
 
     def _clean_number(self, value):
-        """Преобразует строку с числом (с пробелами, запятыми) в float"""
-        if pd.isna(value):
+        """Преобразует любой вход в число с плавающей точкой (float)"""
+        if value is None:
             return 0.0
         if isinstance(value, (int, float)):
             return float(value)
-        # Удаляем пробелы, заменяем запятую на точку
-        cleaned = str(value).replace(' ', '').replace(',', '.').replace('−', '-').replace('—', '-')
-        # Удаляем всё кроме цифр, точки и минуса
-        cleaned = re.sub(r'[^\d.-]', '', cleaned)
+        if isinstance(value, bytes):
+            # Пытаемся декодировать байты в строку
+            try:
+                s = value.decode('utf-8')
+            except:
+                s = str(value)
+        else:
+            s = str(value)
+        # Очистка строки: убираем пробелы, заменяем запятую на точку, убираем лишние символы
+        s = s.strip().replace(' ', '').replace(',', '.').replace('−', '-').replace('—', '-')
+        s = re.sub(r'[^\d.-]', '', s)
         try:
-            return float(cleaned) if cleaned else 0.0
+            return float(s) if s else 0.0
         except:
             return 0.0
 
@@ -1282,16 +1397,18 @@ class MainWindow(QMainWindow):
         # Очистка предыдущих графиков
         for ax in self.axes.flat:
             ax.clear()
+
+        df_clean = self.current_df.fillna(0)    
         
         # 1. Круговая диаграмма по товарным группам
-        group_profit = self.current_df.groupby('product_group')['net_profit'].sum()
+        group_profit = df_clean.groupby('product_group')['net_profit'].sum()
         colors1 = plt.cm.Set3(np.linspace(0, 1, len(group_profit)))
         self.axes[0, 0].pie(group_profit.values, labels=group_profit.index, autopct='%1.1f%%', 
                            colors=colors1, startangle=90)
         self.axes[0, 0].set_title('Распределение прибыли по товарным группам')
         
         # 2. Столбчатая диаграмма НДС по компаниям
-        company_vat = self.current_df.groupby('company')['vat_to_budget'].sum()
+        company_vat = df_clean.groupby('company')['vat_to_budget'].sum()
         bars = self.axes[0, 1].bar(company_vat.index, company_vat.values, 
                                    color=['#3498db', '#2ecc71', '#e74c3c'])
         self.axes[0, 1].set_title('НДС к уплате по компаниям')
@@ -1305,8 +1422,8 @@ class MainWindow(QMainWindow):
                                 f'{height:,.0f}'.replace(",", " "), ha='center', va='bottom')
         
         # 3. Линейный график выручки по периодам
-        if 'period' in self.current_df.columns:
-            period_revenue = self.current_df.groupby('period')['revenue'].sum().sort_index()
+        if 'period' in df_clean.columns:
+            period_revenue = df_clean.groupby('period')['revenue'].sum().sort_index()
             self.axes[1, 0].plot(period_revenue.index, period_revenue.values, 
                                 marker='o', linewidth=2, color='#9b59b6')
             self.axes[1, 0].set_title('Динамика выручки по периодам')
@@ -1315,7 +1432,7 @@ class MainWindow(QMainWindow):
             self.axes[1, 0].tick_params(axis='x', rotation=45)
         
         # 4. ТОП-5 товаров по прибыльности
-        top_products = self.current_df.nlargest(5, 'net_profit')[['nomenclature', 'net_profit']]
+        top_products = df_clean.nlargest(5, 'net_profit')[['nomenclature', 'net_profit']]
         bars2 = self.axes[1, 1].barh(top_products['nomenclature'], top_products['net_profit'],
                                     color=plt.cm.viridis(np.linspace(0.2, 0.8, len(top_products))))
         self.axes[1, 1].set_title('ТОП-5 товаров по прибыльности')
@@ -1641,7 +1758,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v1.4.0</p>
+        <p><b>Версия программы:</b> v1.5.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
