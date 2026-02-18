@@ -511,6 +511,7 @@ class MainWindow(QMainWindow):
         # Обновляем отображение только если есть новые записи
         if success_count > 0:
             self.current_df = self.db.get_all_data()
+            print(f"Загружено записей из БД: {len(self.current_df)}")
             self.display_data(self.current_df)
             self.update_totals()
             # Защита от NaN в графиках
@@ -807,44 +808,110 @@ class MainWindow(QMainWindow):
     # ---------- Парсер для книги покупок ----------
     def _parse_purchase_ledger(self, file_path):
         df = pd.read_excel(file_path, header=None)
-        header_text = self._get_header_text(file_path, 5)
-        company = self._extract_company_from_text(header_text)
-        period = self._extract_period_from_text(header_text, file_path)
 
+        # --- Извлечение компании ---
+        company = "Неизвестно"
+        for i in range(5):
+            row = df.iloc[i]
+            row_str = ' '.join([str(c) for c in row if pd.notna(c)]).lower()
+            if 'покупатель' in row_str:
+                # Ищем ячейку, содержащую "покупатель"
+                for j, cell in enumerate(row):
+                    if isinstance(cell, str) and 'покупатель' in cell.lower():
+                        # Берём первую непустую ячейку справа
+                        for k in range(j+1, len(row)):
+                            if pd.notna(row[k]) and str(row[k]).strip():
+                                company = str(row[k]).strip()
+                                # Убираем лишние кавычки и пробелы
+                                company = company.replace('"', '').replace('«', '').replace('»', '').strip()
+                                break
+                        break
+                if company != "Неизвестно":
+                    break
+
+        # Если не нашли, пробуем из имени файла
+        if company == "Неизвестно":
+            import re
+            match = re.search(r'(ООО|ИП|ЗАО|ОАО)\s*[«"]?([^»"\s]+)', os.path.basename(file_path))
+            if match:
+                company = match.group(0)
+            else:
+                # Последний вариант – просто первая часть имени файла
+                company = os.path.basename(file_path).split()[0]
+
+        # --- Извлечение периода ---
+        period = "03.2025"
+        for i in range(5):
+            row = df.iloc[i]
+            for cell in row:
+                if isinstance(cell, str) and 'период с' in cell.lower():
+                    import re
+                    match = re.search(r'(\d{2})\.(\d{2})\.(\d{4})', cell)
+                    if match:
+                        day, month, year = match.groups()
+                        period = f"{month}.{year}"
+                        break
+            if period != "03.2025":
+                break
+
+        # --- Поиск итоговой строки ---
         total_row = None
         for i in range(len(df)-1, max(0, len(df)-50), -1):
             cell_val = df.iloc[i, 0] if df.shape[1] > 0 else ''
             if pd.isna(cell_val):
                 continue
-            if 'всего' in str(cell_val).lower() or 'итого' in str(cell_val).lower():
+            if 'всего' in str(cell_val).lower():
                 total_row = df.iloc[i]
                 break
 
         if total_row is None:
-            raise ValueError("Не удалось найти итоговую строку в книге покупок")
+            print(f"Файл {os.path.basename(file_path)}: не найдена итоговая строка, пропускаем.")
+            return 0
 
-        vat_sum = self._clean_number(total_row[18]) if len(total_row) > 18 else 0
-        if vat_sum == 0 and len(total_row) > 14:
-            vat_sum = self._clean_number(total_row[14])
+        # --- Извлечение суммы НДС (колонка 59) ---
+        vat_sum = 0.0
+        if len(total_row) > 59:
+            vat_sum = self._clean_number(total_row[59])
+            print(f"Файл {os.path.basename(file_path)}: сумма НДС = {vat_sum}")
+        else:
+            # Запасные варианты, если колонка 59 отсутствует
+            for col in [14, 18, 58, 60]:
+                if len(total_row) > col:
+                    vat_sum = self._clean_number(total_row[col])
+                    if vat_sum != 0.0:
+                        print(f"Файл {os.path.basename(file_path)}: сумма НДС найдена в колонке {col} = {vat_sum}")
+                        break
 
+        if vat_sum == 0.0 or pd.isna(vat_sum):
+            print(f"Файл {os.path.basename(file_path)}: сумма НДС не найдена, пропускаем.")
+            return 0
+
+        # --- Формирование записи с гарантией правильных типов ---
         data_row = {
-            'period': period,
-            'company': company,
+            'period': str(period),
+            'company': str(company),
             'product_group': 'НДС к вычету',
             'nomenclature': 'Книга покупок',
-            'revenue': 0,
-            'vat_in_revenue': 0,
-            'cost_price': 0,
-            'gross_profit': 0,
-            'sales_expenses': 0,
-            'other_income_expenses': 0,
-            'net_profit': 0,
-            'vat_deductible': vat_sum,
-            'vat_to_budget': 0,
+            'revenue': 0.0,
+            'vat_in_revenue': 0.0,
+            'cost_price': 0.0,
+            'gross_profit': 0.0,
+            'sales_expenses': 0.0,
+            'other_income_expenses': 0.0,
+            'net_profit': 0.0,
+            'vat_deductible': float(vat_sum),
+            'vat_to_budget': 0.0,
             'quantity': 0
         }
+
         df_result = pd.DataFrame([data_row])
-        return self.db.save_data(df_result)
+        # Принудительно задаём типы, чтобы избежать байтов
+        df_result['quantity'] = df_result['quantity'].astype(int)
+        df_result['revenue'] = df_result['revenue'].astype(float)
+        # ... остальные числовые поля уже float
+
+        saved = self.db.save_data(df_result)
+        return saved
 
     # ---------- Парсер для книги продаж ----------
     def _parse_sales_ledger(self, file_path):
@@ -1390,56 +1457,116 @@ class MainWindow(QMainWindow):
             self.profit_label.setText(f"Чистая прибыль: {total_profit:,.0f} ₽".replace(",", " "))
     
     def update_charts(self):
-        """Обновление графиков"""
         if self.current_df is None or self.current_df.empty:
+            # Если данных нет, очищаем графики и выводим сообщение
+            for ax in self.axes.flat:
+                ax.clear()
+                ax.text(0.5, 0.5, 'Нет данных для отображения', 
+                        ha='center', va='center', fontsize=12)
+            self.canvas.draw()
             return
-        
+
+        # Заменяем NaN на 0 для числовых колонок
+        df_clean = self.current_df.fillna(0)
+
         # Очистка предыдущих графиков
         for ax in self.axes.flat:
             ax.clear()
 
-        df_clean = self.current_df.fillna(0)    
-        
         # 1. Круговая диаграмма по товарным группам
-        group_profit = df_clean.groupby('product_group')['net_profit'].sum()
-        colors1 = plt.cm.Set3(np.linspace(0, 1, len(group_profit)))
-        self.axes[0, 0].pie(group_profit.values, labels=group_profit.index, autopct='%1.1f%%', 
-                           colors=colors1, startangle=90)
-        self.axes[0, 0].set_title('Распределение прибыли по товарным группам')
-        
+        try:
+            if 'product_group' in df_clean.columns and not df_clean['product_group'].empty:
+                group_profit = df_clean.groupby('product_group')['net_profit'].sum()
+                if not group_profit.empty and group_profit.sum() != 0:
+                    colors1 = plt.cm.Set3(np.linspace(0, 1, len(group_profit)))
+                    self.axes[0, 0].pie(group_profit.values, labels=group_profit.index, 
+                                        autopct='%1.1f%%', colors=colors1, startangle=90)
+                    self.axes[0, 0].set_title('Распределение прибыли по товарным группам')
+                else:
+                    self.axes[0, 0].text(0.5, 0.5, 'Нет данных по группам', 
+                                        ha='center', va='center')
+            else:
+                self.axes[0, 0].text(0.5, 0.5, 'Нет данных по группам', 
+                                    ha='center', va='center')
+        except Exception as e:
+            print(f"Ошибка при построении круговой диаграммы: {e}")
+            self.axes[0, 0].text(0.5, 0.5, 'Ошибка', ha='center', va='center')
+
         # 2. Столбчатая диаграмма НДС по компаниям
-        company_vat = df_clean.groupby('company')['vat_to_budget'].sum()
-        bars = self.axes[0, 1].bar(company_vat.index, company_vat.values, 
-                                   color=['#3498db', '#2ecc71', '#e74c3c'])
-        self.axes[0, 1].set_title('НДС к уплате по компаниям')
-        self.axes[0, 1].set_ylabel('Сумма НДС, ₽')
-        self.axes[0, 1].tick_params(axis='x', rotation=45)
-        
-        # Добавление значений над столбцами
-        for bar in bars:
-            height = bar.get_height()
-            self.axes[0, 1].text(bar.get_x() + bar.get_width()/2., height + max(company_vat.values)*0.01,
-                                f'{height:,.0f}'.replace(",", " "), ha='center', va='bottom')
-        
+        try:
+            if 'company' in df_clean.columns and not df_clean['company'].empty:
+                company_vat = df_clean.groupby('company')['vat_to_budget'].sum()
+                if not company_vat.empty and company_vat.sum() != 0:
+                    bars = self.axes[0, 1].bar(company_vat.index, company_vat.values,
+                                            color=['#3498db', '#2ecc71', '#e74c3c'])
+                    self.axes[0, 1].set_title('НДС к уплате по компаниям')
+                    self.axes[0, 1].set_ylabel('Сумма НДС, ₽')
+                    self.axes[0, 1].tick_params(axis='x', rotation=45)
+                    # Добавление значений над столбцами
+                    for bar in bars:
+                        height = bar.get_height()
+                        if height > 0:
+                            self.axes[0, 1].text(bar.get_x() + bar.get_width()/2., height,
+                                                f'{height:,.0f}'.replace(",", " "),
+                                                ha='center', va='bottom', fontsize=8)
+                else:
+                    self.axes[0, 1].text(0.5, 0.5, 'Нет данных по компаниям',
+                                        ha='center', va='center')
+            else:
+                self.axes[0, 1].text(0.5, 0.5, 'Нет данных по компаниям',
+                                    ha='center', va='center')
+        except Exception as e:
+            print(f"Ошибка при построении столбчатой диаграммы: {e}")
+            self.axes[0, 1].text(0.5, 0.5, 'Ошибка', ha='center', va='center')
+
         # 3. Линейный график выручки по периодам
-        if 'period' in df_clean.columns:
-            period_revenue = df_clean.groupby('period')['revenue'].sum().sort_index()
-            self.axes[1, 0].plot(period_revenue.index, period_revenue.values, 
-                                marker='o', linewidth=2, color='#9b59b6')
-            self.axes[1, 0].set_title('Динамика выручки по периодам')
-            self.axes[1, 0].set_ylabel('Выручка, ₽')
-            self.axes[1, 0].grid(True, alpha=0.3)
-            self.axes[1, 0].tick_params(axis='x', rotation=45)
-        
+        try:
+            if 'period' in df_clean.columns and not df_clean['period'].empty:
+                period_revenue = df_clean.groupby('period')['revenue'].sum().sort_index()
+                if not period_revenue.empty and period_revenue.sum() != 0:
+                    self.axes[1, 0].plot(period_revenue.index, period_revenue.values,
+                                        marker='o', linewidth=2, color='#9b59b6')
+                    self.axes[1, 0].set_title('Динамика выручки по периодам')
+                    self.axes[1, 0].set_ylabel('Выручка, ₽')
+                    self.axes[1, 0].grid(True, alpha=0.3)
+                    self.axes[1, 0].tick_params(axis='x', rotation=45)
+                else:
+                    self.axes[1, 0].text(0.5, 0.5, 'Нет данных по периодам',
+                                        ha='center', va='center')
+            else:
+                self.axes[1, 0].text(0.5, 0.5, 'Нет данных по периодам',
+                                    ha='center', va='center')
+        except Exception as e:
+            print(f"Ошибка при построении линейного графика: {e}")
+            self.axes[1, 0].text(0.5, 0.5, 'Ошибка', ha='center', va='center')
+
         # 4. ТОП-5 товаров по прибыльности
-        top_products = df_clean.nlargest(5, 'net_profit')[['nomenclature', 'net_profit']]
-        bars2 = self.axes[1, 1].barh(top_products['nomenclature'], top_products['net_profit'],
-                                    color=plt.cm.viridis(np.linspace(0.2, 0.8, len(top_products))))
-        self.axes[1, 1].set_title('ТОП-5 товаров по прибыльности')
-        self.axes[1, 1].set_xlabel('Прибыль, ₽')
-        
-        # Автонастройка макета
-        plt.tight_layout()
+        try:
+            if 'nomenclature' in df_clean.columns and not df_clean['nomenclature'].empty:
+                top_products = df_clean.nlargest(5, 'net_profit')[['nomenclature', 'net_profit']]
+                if not top_products.empty and top_products['net_profit'].sum() > 0:
+                    # Ограничим длину названий
+                    labels = [str(x)[:20] + '...' if len(str(x)) > 20 else str(x) 
+                            for x in top_products['nomenclature']]
+                    bars = self.axes[1, 1].barh(labels, top_products['net_profit'],
+                                            color=plt.cm.viridis(np.linspace(0.2, 0.8, len(top_products))))
+                    self.axes[1, 1].set_title('ТОП-5 товаров по прибыльности')
+                    self.axes[1, 1].set_xlabel('Прибыль, ₽')
+                else:
+                    self.axes[1, 1].text(0.5, 0.5, 'Нет данных по товарам',
+                                        ha='center', va='center')
+            else:
+                self.axes[1, 1].text(0.5, 0.5, 'Нет данных по товарам',
+                                    ha='center', va='center')
+        except Exception as e:
+            print(f"Ошибка при построении ТОП-5: {e}")
+            self.axes[1, 1].text(0.5, 0.5, 'Ошибка', ha='center', va='center')
+
+        # Автонастройка макета с защитой от ошибок
+        try:
+            plt.tight_layout()
+        except Exception as e:
+            print(f"Ошибка tight_layout: {e}")
         self.canvas.draw()
     
     def export_to_excel(self):
@@ -1758,7 +1885,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v1.5.0</p>
+        <p><b>Версия программы:</b> v1.6.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
