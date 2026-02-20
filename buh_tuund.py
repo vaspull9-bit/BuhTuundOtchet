@@ -540,8 +540,101 @@ class MainWindow(QMainWindow):
                 msg += f"\n... и ещё {len(error_files)-5} ошибок"
         QMessageBox.information(self, "Результат загрузки", msg)
 
+    def _extract_company_from_text(self, text):
+        """Извлекает название компании из текста (ищем ООО, ИП и т.п.)"""
+        import re
+        # Ищем ООО "Название", ИП "Название" и т.п.
+        match = re.search(r'(ООО|ИП|ЗАО|ОАО)\s*[«"]?([^»"\s]+)[»"]?', text)
+        if match:
+            return match.group(0).replace('"', '').replace('«', '').replace('»', '').strip()
+        # Если не нашли, пробуем взять первую строку после "Покупатель"
+        lines = text.split('\n')
+        for line in lines:
+            if 'покупатель' in line.lower():
+                parts = line.split()
+                if len(parts) > 1:
+                    return parts[1].strip('"«»')
+        return "Неизвестно"
+
+    def _extract_period_from_text(self, text, file_path):
+        """Извлекает период (месяц.год) из текста или имени файла"""
+        import re
+        # Ищем "за 2025 г." или "с 01.01.2025 по 31.03.2025"
+        match = re.search(r'за\s+(\d{4})\s*г', text)
+        if match:
+            year = match.group(1)
+            # Пробуем найти месяц по названию
+            month_match = re.search(r'(январ\w+|феврал\w+|март\w+|апрел\w+|май\w+|июн\w+|июл\w+|август\w+|сентябр\w+|октябр\w+|ноябр\w+|декабр\w+)', text.lower())
+            months = {'январ': '01', 'феврал': '02', 'март': '03', 'апрел': '04', 'май': '05', 'июн': '06',
+                    'июл': '07', 'август': '08', 'сентябр': '09', 'октябр': '10', 'ноябр': '11', 'декабр': '12'}
+            if month_match:
+                for ru, num in months.items():
+                    if ru in month_match.group():
+                        return f"{num}.{year}"
+            # Ищем даты "с ... по ..."
+            period_match = re.search(r'с\s+(\d{2})\.(\d{2})\.(\d{4})\s+по\s+(\d{2})\.(\d{2})\.(\d{4})', text)
+            if period_match:
+                start_day, start_month, start_year, end_day, end_month, end_year = period_match.groups()
+                return f"{end_month}.{end_year}"
+            return f"12.{year}"
+        # Если в тексте нет, ищем в имени файла
+        base = os.path.basename(file_path)
+        match = re.search(r'(\d{4})', base)
+        if match:
+            return f"12.{match.group(1)}"
+        return "01.2026"
+
+    def _flatten_text(self, df, rows):
+        """Преобразует указанные строки DataFrame в одну строку текста"""
+        if isinstance(rows, slice):
+            subset = df.iloc[rows]
+        else:
+            subset = df.iloc[list(rows)]
+        # Заменяем NaN на пустую строку
+        subset = subset.fillna('')
+        # Преобразуем каждое значение в строку
+        strings = []
+        for _, row in subset.iterrows():
+            for cell in row:
+                strings.append(str(cell))
+        return ' '.join(strings)
+
+    def _clean_number(self, value):
+        """Преобразует любой вход в число с плавающей точкой (float)"""
+        if value is None:
+            return 0.0
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, bytes):
+            # Пытаемся декодировать байты в строку
+            try:
+                s = value.decode('utf-8')
+            except:
+                s = str(value)
+        else:
+            s = str(value)
+        # Очистка строки: убираем пробелы, заменяем запятую на точку
+        s = s.strip().replace(' ', '').replace(',', '.').replace('−', '-').replace('—', '-')
+        import re
+        s = re.sub(r'[^\d.-]', '', s)
+        try:
+            return float(s) if s else 0.0
+        except:
+            return 0.0
+
+    def _month_name_to_number(self, month_name):
+        """Преобразует русское название месяца в номер"""
+        month_names = {
+            'янв': '01', 'фев': '02', 'мар': '03', 'апр': '04', 'май': '05', 'июн': '06',
+            'июл': '07', 'авг': '08', 'сен': '09', 'окт': '10', 'ноя': '11', 'дек': '12'
+        }
+        for key, num in month_names.items():
+            if key in month_name.lower():
+                return num
+        return '01'    
+
     def _import_excel_file(self, file_path):
-        """Универсальный импорт: определяет тип файла и вызывает нужный парсер."""
+        """Универсальный импорт: определяет тип файла по первым строкам и вызывает нужный парсер."""
         if file_path.lower().endswith('.xls'):
             try:
                 import xlrd
@@ -562,15 +655,15 @@ class MainWindow(QMainWindow):
             return self._parse_purchase_ledger_detailed(file_path)
         elif 'книга продаж' in preview_text:
             return self._parse_sales_ledger_detailed(file_path)
-        elif 'оборотно-сальдовая ведомость по счету 19' in preview_text:
+        elif 'оборотно-сальдовая ведомость по счету 19' in preview_text or 'счет 19' in preview_text:
             return self._parse_osv_19_detailed(file_path)
-        elif 'оборотно-сальдовая ведомость по счету 41' in preview_text:
+        elif 'оборотно-сальдовая ведомость по счету 41' in preview_text or 'счет 41' in preview_text:
             return self._parse_osv_41_detailed(file_path)
-        elif 'оборотно-сальдовая ведомость по счету 44' in preview_text:
+        elif 'оборотно-сальдовая ведомость по счету 44' in preview_text or 'счет 44' in preview_text:
             return self._parse_osv_44_detailed(file_path)
-        elif 'оборотно-сальдовая ведомость по счету 90' in preview_text:
+        elif 'оборотно-сальдовая ведомость по счету 90' in preview_text or 'счет 90' in preview_text:
             return self._parse_osv_90_detailed(file_path)
-        elif 'оборотно-сальдовая ведомость по счету 91' in preview_text:
+        elif 'оборотно-сальдовая ведомость по счету 91' in preview_text or 'счет 91' in preview_text:
             return self._parse_osv_91_detailed(file_path)
         elif 'отчет по продажам за' in preview_text:
             return self._parse_sales_report_detailed(file_path)
@@ -763,21 +856,24 @@ class MainWindow(QMainWindow):
         period = self._extract_period_from_text(header_text, file_path)
 
         print(f"\n--- ОСВ 19: {os.path.basename(file_path)} ---")
-        for i in range(min(15, len(df))):
+        for i in range(min(20, len(df))):
             print(f"Строка {i}: {df.iloc[i].tolist()}")
 
-        # Находим строку с заголовками: где есть 'Счет' и 'Контрагенты'
+        # Поиск строки с 'Счет' и следующей строки с 'Контрагенты'
         header_row = None
-        for i in range(len(df)):
+        for i in range(len(df)-1):
             row = df.iloc[i]
             row_str = ' '.join([str(c).lower() for c in row if pd.notna(c)])
-            if 'счет' in row_str and 'контрагенты' in row_str:
-                header_row = i
-                break
+            if 'счет' in row_str:
+                next_row = df.iloc[i+1]
+                next_str = ' '.join([str(c).lower() for c in next_row if pd.notna(c)])
+                if 'контрагенты' in next_str:
+                    header_row = i
+                    break
         if header_row is None:
             raise ValueError("Не удалось найти заголовки в ОСВ 19")
 
-        # Данные начинаются через 2 строки после заголовков (обычно после строки 'Период')
+        # Данные начинаются через 3 строки после header_row (после двух строк заголовков и строки 'Период')
         start_row = header_row + 3
         data_rows = []
         for idx in range(start_row, len(df)):
@@ -789,9 +885,7 @@ class MainWindow(QMainWindow):
             kontragent = str(row[1]).strip() if len(row) > 1 and not pd.isna(row[1]) else ''
             if not kontragent:
                 continue
-            # Оборот дебет (НДС к вычету) – ищем колонку с 'Дебет' под 'Обороты за период'
-            # По структуре: после 'Сальдо на начало периода' идут 'Обороты за период' с подзаголовками
-            # Индекс колонки с оборотом дебет – 5 (если считать с 0)
+            # Оборот дебет (НДС к вычету) – колонка 5 (индекс 5)
             vat = self._clean_number(row[5]) if len(row) > 5 else 0.0
             if vat == 0.0:
                 continue
@@ -832,21 +926,24 @@ class MainWindow(QMainWindow):
         period = self._extract_period_from_text(header_text, file_path)
 
         print(f"\n--- ОСВ 41: {os.path.basename(file_path)} ---")
-        for i in range(min(15, len(df))):
+        for i in range(min(20, len(df))):
             print(f"Строка {i}: {df.iloc[i].tolist()}")
 
-        # Ищем строку с заголовками: 'Счет', 'Номенклатура'
+        # Поиск строки с 'Счет' и следующей строки с 'Номенклатура'
         header_row = None
-        for i in range(len(df)):
+        for i in range(len(df)-1):
             row = df.iloc[i]
             row_str = ' '.join([str(c).lower() for c in row if pd.notna(c)])
-            if 'счет' in row_str and 'номенклатура' in row_str:
-                header_row = i
-                break
+            if 'счет' in row_str:
+                next_row = df.iloc[i+1]
+                next_str = ' '.join([str(c).lower() for c in next_row if pd.notna(c)])
+                if 'номенклатура' in next_str:
+                    header_row = i
+                    break
         if header_row is None:
             raise ValueError("Не удалось найти заголовки в ОСВ 41")
 
-        # Данные начинаются через 2 строки после заголовков (после 'Склады')
+        # Данные начинаются через 2 строки после header_row (после двух строк заголовков)
         start_row = header_row + 2
         data_rows = []
         for idx in range(start_row, len(df)):
@@ -856,8 +953,7 @@ class MainWindow(QMainWindow):
             nomenclature = str(row[1]).strip()
             if 'итого' in nomenclature.lower():
                 continue
-            # Оборот кредит (себестоимость) – колонка 'Кредит' под 'Обороты за период'
-            # По структуре: индекс 6 (кредит оборотов)
+            # Оборот кредит (себестоимость) – колонка 6 (индекс 6)
             cost = self._clean_number(row[6]) if len(row) > 6 else 0.0
             if cost == 0.0:
                 continue
@@ -898,22 +994,25 @@ class MainWindow(QMainWindow):
         period = self._extract_period_from_text(header_text, file_path)
 
         print(f"\n--- ОСВ 44: {os.path.basename(file_path)} ---")
-        for i in range(min(15, len(df))):
+        for i in range(min(20, len(df))):
             print(f"Строка {i}: {df.iloc[i].tolist()}")
 
-        # Ищем строку с заголовками: 'Счет', 'Статьи затрат'
+        # Поиск строки с 'Счет' и следующей строки с 'Статьи затрат'
         header_row = None
-        for i in range(len(df)):
+        for i in range(len(df)-1):
             row = df.iloc[i]
             row_str = ' '.join([str(c).lower() for c in row if pd.notna(c)])
-            if 'счет' in row_str and 'статьи затрат' in row_str:
-                header_row = i
-                break
+            if 'счет' in row_str:
+                next_row = df.iloc[i+1]
+                next_str = ' '.join([str(c).lower() for c in next_row if pd.notna(c)])
+                if 'статьи затрат' in next_str:
+                    header_row = i
+                    break
         if header_row is None:
             raise ValueError("Не удалось найти заголовки в ОСВ 44")
 
-        # Данные начинаются через 2 строки после заголовков (после строки 'Период')
-        start_row = header_row + 2
+        # Данные начинаются через 3 строки после header_row (после двух строк заголовков и строки 'Период')
+        start_row = header_row + 3
         data_rows = []
         for idx in range(start_row, len(df)):
             row = df.iloc[idx]
@@ -922,8 +1021,7 @@ class MainWindow(QMainWindow):
             article = str(row[1]).strip()
             if 'итого' in article.lower():
                 break
-            # Оборот дебет (расходы) – колонка 'Дебет' под 'Обороты за период'
-            # По структуре: индекс 3 (дебет оборотов)
+            # Оборот дебет (расходы) – колонка 3 (индекс 3)
             expenses = self._clean_number(row[3]) if len(row) > 3 else 0.0
             if expenses == 0.0:
                 continue
@@ -967,7 +1065,7 @@ class MainWindow(QMainWindow):
         for i in range(min(20, len(df))):
             print(f"Строка {i}: {df.iloc[i].tolist()}")
 
-        # Ищем строку с заголовками: 'Счет', 'Показатели'
+        # Поиск строки с 'Счет' и 'Показатели' (обычно в одной строке)
         header_row = None
         for i in range(len(df)):
             row = df.iloc[i]
@@ -978,8 +1076,8 @@ class MainWindow(QMainWindow):
         if header_row is None:
             raise ValueError("Не удалось найти заголовки в ОСВ 90")
 
-        # Данные начинаются через 2 строки после заголовков (после строки с 'Дебет'/'Кредит')
-        start_row = header_row + 2
+        # Данные начинаются со следующей строки после заголовков
+        start_row = header_row + 1
         data_rows = []
         for idx in range(start_row, len(df)):
             row = df.iloc[idx]
@@ -989,8 +1087,7 @@ class MainWindow(QMainWindow):
             if 'итого' in account.lower():
                 break
             if '90.01' in account:
-                # Выручка (кредит) – колонка 6 (индекс 6)
-                revenue = self._clean_number(row[6]) if len(row) > 6 else 0.0
+                revenue = self._clean_number(row[6]) if len(row) > 6 else 0.0  # кредит
                 if revenue != 0.0:
                     data_rows.append({
                         'period': period,
@@ -1009,8 +1106,7 @@ class MainWindow(QMainWindow):
                         'quantity': 0
                     })
             elif '90.02' in account:
-                # Себестоимость (дебет) – колонка 5 (индекс 5)
-                cost = self._clean_number(row[5]) if len(row) > 5 else 0.0
+                cost = self._clean_number(row[5]) if len(row) > 5 else 0.0  # дебет
                 if cost != 0.0:
                     data_rows.append({
                         'period': period,
@@ -1029,8 +1125,7 @@ class MainWindow(QMainWindow):
                         'quantity': 0
                     })
             elif '90.03' in account:
-                # НДС (дебет) – колонка 5 (индекс 5)
-                vat = self._clean_number(row[5]) if len(row) > 5 else 0.0
+                vat = self._clean_number(row[5]) if len(row) > 5 else 0.0  # дебет
                 if vat != 0.0:
                     data_rows.append({
                         'period': period,
@@ -1081,19 +1176,22 @@ class MainWindow(QMainWindow):
         for i in range(min(20, len(df))):
             print(f"Строка {i}: {df.iloc[i].tolist()}")
 
-        # Ищем строку с заголовками: 'Счет', 'Прочие доходы и расходы'
+        # Поиск строки с 'Счет' и следующей строки с 'Прочие доходы и расходы'
         header_row = None
-        for i in range(len(df)):
+        for i in range(len(df)-1):
             row = df.iloc[i]
             row_str = ' '.join([str(c).lower() for c in row if pd.notna(c)])
-            if 'счет' in row_str and 'прочие доходы и расходы' in row_str:
-                header_row = i
-                break
+            if 'счет' in row_str:
+                next_row = df.iloc[i+1]
+                next_str = ' '.join([str(c).lower() for c in next_row if pd.notna(c)])
+                if 'прочие доходы и расходы' in next_str:
+                    header_row = i
+                    break
         if header_row is None:
             raise ValueError("Не удалось найти заголовки в ОСВ 91")
 
-        # Данные начинаются через 2 строки после заголовков (после строки 'Период')
-        start_row = header_row + 2
+        # Данные начинаются через 3 строки после header_row (после двух строк заголовков и строки 'Период')
+        start_row = header_row + 3
         data_rows = []
         for idx in range(start_row, len(df)):
             row = df.iloc[idx]
@@ -1103,8 +1201,7 @@ class MainWindow(QMainWindow):
             if 'итого' in account.lower():
                 break
             if '91.01' in account:
-                # Прочие доходы (кредит) – колонка 5 (индекс 5)
-                income = self._clean_number(row[5]) if len(row) > 5 else 0.0
+                income = self._clean_number(row[5]) if len(row) > 5 else 0.0  # кредит
                 if income != 0.0:
                     data_rows.append({
                         'period': period,
@@ -1123,8 +1220,7 @@ class MainWindow(QMainWindow):
                         'quantity': 0
                     })
             elif '91.02' in account:
-                # Прочие расходы (дебет) – колонка 4 (индекс 4)
-                expense = self._clean_number(row[4]) if len(row) > 4 else 0.0
+                expense = self._clean_number(row[4]) if len(row) > 4 else 0.0  # дебет
                 if expense != 0.0:
                     data_rows.append({
                         'period': period,
@@ -2358,7 +2454,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v2.0.2</p>
+        <p><b>Версия программы:</b> v2.0.3</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
