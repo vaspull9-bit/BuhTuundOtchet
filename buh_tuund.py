@@ -27,13 +27,12 @@ from datetime import datetime
 
 # ==================== БАЗА ДАННЫХ ====================
 class DatabaseManager:
-    def __init__(self):
-        self.conn = sqlite3.connect('buh_tuund.db', check_same_thread=False)
+    def __init__(self, db_path='buh_tuund.db'):
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.create_tables()
-    
+
     def create_tables(self):
         cursor = self.conn.cursor()
-        # Основная таблица данных
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS reports (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,8 +53,6 @@ class DatabaseManager:
                 import_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
-        # Таблица истории импорта
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS import_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,48 +62,55 @@ class DatabaseManager:
             )
         ''')
         self.conn.commit()
-    
+
     def save_data(self, df):
-        cursor = self.conn.cursor()
-        records = df.to_records(index=False)
-        
-        for record in records:
-            cursor.execute('''
-                INSERT INTO reports 
-                (period, company, product_group, nomenclature, revenue, vat_in_revenue,
-                 cost_price, gross_profit, sales_expenses, other_income_expenses,
-                 net_profit, vat_deductible, vat_to_budget, quantity)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', tuple(record))
-        
-        cursor.execute('''
-            INSERT INTO import_history (filename, records_count) 
-            VALUES (?, ?)
-        ''', ('Импорт данных', len(df)))
-        
+        """
+        Сохраняет данные из DataFrame в таблицу reports.
+        Предварительно приводит колонки к нужным типам.
+        Возвращает количество сохранённых записей.
+        """
+        # Создаём копию, чтобы не менять исходный df
+        df_to_save = df.copy()
+
+        # Список числовых колонок (REAL)
+        numeric_cols = ['revenue', 'vat_in_revenue', 'cost_price', 'gross_profit',
+                        'sales_expenses', 'other_income_expenses', 'net_profit',
+                        'vat_deductible', 'vat_to_budget']
+        # Приводим каждую к float, заменяем NaN на 0.0
+        for col in numeric_cols:
+            if col in df_to_save.columns:
+                df_to_save[col] = pd.to_numeric(df_to_save[col], errors='coerce').fillna(0.0)
+
+        # Колонка quantity должна быть целым числом
+        if 'quantity' in df_to_save.columns:
+            df_to_save['quantity'] = pd.to_numeric(df_to_save['quantity'], errors='coerce').fillna(0).astype(int)
+
+        # Остальные колонки (period, company, product_group, nomenclature) уже строки, оставляем как есть
+
+        # Вставляем в базу данных
+        df_to_save.to_sql('reports', self.conn, if_exists='append', index=False)
         self.conn.commit()
-        return len(df)
-    
+
+        # Записываем в историю (можно добавить имя файла, но его нет в параметрах; можно передавать отдельно)
+        # Пока пропустим или оставим как есть
+        return len(df_to_save)
+
     def get_all_data(self):
         query = "SELECT * FROM reports ORDER BY period DESC, company"
         return pd.read_sql_query(query, self.conn)
-    
+
     def get_filtered_data(self, company=None, period=None, product_group=None):
         query = "SELECT * FROM reports WHERE 1=1"
         params = []
-        
         if company and company != "Все компании":
             query += " AND company = ?"
             params.append(company)
-        
         if period and period != "Все периоды":
             query += " AND period = ?"
             params.append(period)
-        
         if product_group and product_group != "Все группы":
             query += " AND product_group = ?"
             params.append(product_group)
-        
         query += " ORDER BY period DESC, company"
         return pd.read_sql_query(query, self.conn, params=params)
 
@@ -511,6 +515,15 @@ class MainWindow(QMainWindow):
         # Обновляем отображение только если есть новые записи
         if success_count > 0:
             self.current_df = self.db.get_all_data()
+            # Принудительное преобразование всех числовых колонок
+            num_cols = ['revenue','vat_in_revenue','cost_price','gross_profit','sales_expenses',
+                'other_income_expenses','net_profit','vat_deductible','vat_to_budget','quantity']
+            for col in num_cols:
+                if col in self.current_df.columns:
+                    self.current_df[col] = pd.to_numeric(self.current_df[col], errors='coerce').fillna(0)
+            self.current_df['quantity'] = self.current_df['quantity'].astype(int) 
+           
+           
             print(f"Загружено записей из БД: {len(self.current_df)}")
             self.display_data(self.current_df)
             self.update_totals()
@@ -528,23 +541,23 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Результат загрузки", msg)
 
     def _import_excel_file(self, file_path):
-        """Определяет тип файла и вызывает соответствующий парсер."""
+        """Универсальный импорт: определяет тип файла и вызывает нужный парсер."""
         if file_path.lower().endswith('.xls'):
             try:
                 import xlrd
             except ImportError:
-                raise ImportError("Установите xlrd: pip install xlrd")
+                raise ImportError("Для чтения файлов .xls установите xlrd: pip install xlrd")
 
-        # Читаем первые 5 строк для анализа
+        # Читаем первые 10 строк для анализа (больше, чтобы точно определить тип)
         try:
-            df_preview = pd.read_excel(file_path, nrows=5, header=None, dtype=str)
+            df_preview = pd.read_excel(file_path, nrows=10, header=None, dtype=str)
         except:
-            df_preview = pd.read_excel(file_path, nrows=5, header=None)
+            df_preview = pd.read_excel(file_path, nrows=10, header=None)
             df_preview = df_preview.astype(str)
         df_preview = df_preview.fillna('')
         preview_text = ' '.join(df_preview.values.flatten()).lower()
 
-        # Определяем тип
+        # Определяем тип (ищем характерные фразы)
         if 'книга покупок' in preview_text:
             return self._parse_purchase_ledger_detailed(file_path)
         elif 'книга продаж' in preview_text:
@@ -562,7 +575,8 @@ class MainWindow(QMainWindow):
         elif 'отчет по продажам за' in preview_text:
             return self._parse_sales_report_detailed(file_path)
         else:
-            return self._import_legacy(file_path)  # сводный шаблон
+            # Если не распознали – пробуем как сводный шаблон
+            return self._import_legacy(file_path)
 
     # ========== КНИГА ПОКУПОК (построчно) ==========
     def _parse_purchase_ledger_detailed(self, file_path):
@@ -571,12 +585,16 @@ class MainWindow(QMainWindow):
         company = self._extract_company_from_text(header_text)
         period = self._extract_period_from_text(header_text, file_path)
 
+        print(f"\n--- Книга покупок: {os.path.basename(file_path)} ---")
+        for i in range(min(10, len(df))):
+            print(f"Строка {i}: {df.iloc[i].tolist()}")
+
         # Находим строку с заголовками колонок (где есть "№ п/п")
         start_row = None
         for i in range(len(df)):
             row_str = ' '.join([str(c) for c in df.iloc[i] if pd.notna(c)])
             if '№' in row_str and 'п/п' in row_str:
-                start_row = i + 1  # данные начинаются со следующей строки
+                start_row = i + 1
                 break
         if start_row is None:
             raise ValueError("Не удалось найти заголовки в книге покупок")
@@ -586,16 +604,14 @@ class MainWindow(QMainWindow):
             row = df.iloc[idx]
             if pd.isna(row[0]) or str(row[0]).strip() == '':
                 continue
-            # Если встретили "Всего" – останавливаемся
             if 'всего' in str(row[0]).lower():
                 break
 
-            # Извлекаем данные
             seller = str(row[8]) if len(row) > 8 and not pd.isna(row[8]) else ''
             if not seller:
                 continue
-            cost = self._clean_number(row[13]) if len(row) > 13 else 0.0   # стоимость покупок с НДС (колонка 14)
-            vat = self._clean_number(row[18]) if len(row) > 18 else 0.0    # сумма НДС (колонка 19)
+            cost = self._clean_number(row[13]) if len(row) > 13 else 0.0   # стоимость покупок с НДС
+            vat = self._clean_number(row[18]) if len(row) > 18 else 0.0    # сумма НДС
 
             if cost == 0 and vat == 0:
                 continue
@@ -618,10 +634,13 @@ class MainWindow(QMainWindow):
             })
 
         if not data_rows:
+            print("Нет данных в книге покупок")
             return 0
         df_result = pd.DataFrame(data_rows)
         df_result['quantity'] = df_result['quantity'].astype(int)
-        return self.db.save_data(df_result)  
+        saved = self.db.save_data(df_result)
+        print(f"Сохранено {saved} записей из книги покупок")
+        return saved
 
     # ========== КНИГА ПРОДАЖ (построчно) ==========
     def _parse_sales_ledger_detailed(self, file_path):
@@ -630,7 +649,10 @@ class MainWindow(QMainWindow):
         company = self._extract_company_from_text(header_text)
         period = self._extract_period_from_text(header_text, file_path)
 
-        # Поиск строки с заголовками (где есть "№ п/п")
+        print(f"\n--- Книга продаж: {os.path.basename(file_path)} ---")
+        for i in range(min(10, len(df))):
+            print(f"Строка {i}: {df.iloc[i].tolist()}")
+
         start_row = None
         for i in range(len(df)):
             row_str = ' '.join([str(c) for c in df.iloc[i] if pd.notna(c)])
@@ -648,13 +670,11 @@ class MainWindow(QMainWindow):
             if 'всего' in str(row[0]).lower():
                 break
 
-            buyer = str(row[8]) if len(row) > 8 and not pd.isna(row[8]) else ''  # наименование покупателя (колонка 9)
+            buyer = str(row[8]) if len(row) > 8 and not pd.isna(row[8]) else ''
             if not buyer:
                 continue
-            # Сумма продаж с НДС (колонка 13а или 13б?) – по вашей шапке сложно. В типовой книге продаж стоимость с НДС в колонке 13, сумма НДС в колонке 14.
-            # Предположим колонка 13 – стоимость с НДС, колонка 14 – НДС. Подберите индексы под свой файл.
-            revenue = self._clean_number(row[13]) if len(row) > 13 else 0.0
-            vat = self._clean_number(row[14]) if len(row) > 14 else 0.0
+            revenue = self._clean_number(row[13]) if len(row) > 13 else 0.0  # стоимость с НДС
+            vat = self._clean_number(row[14]) if len(row) > 14 else 0.0     # сумма НДС
 
             if revenue == 0 and vat == 0:
                 continue
@@ -677,10 +697,13 @@ class MainWindow(QMainWindow):
             })
 
         if not data_rows:
+            print("Нет данных в книге продаж")
             return 0
         df_result = pd.DataFrame(data_rows)
         df_result['quantity'] = df_result['quantity'].astype(int)
-        return self.db.save_data(df_result)
+        saved = self.db.save_data(df_result)
+        print(f"Сохранено {saved} записей из книги продаж")
+        return saved
 
     # ========== ОСВ 19 (по контрагентам) ==========
     def _parse_osv_19_detailed(self, file_path):
@@ -689,16 +712,12 @@ class MainWindow(QMainWindow):
         company = self._extract_company_from_text(header_text)
         period = self._extract_period_from_text(header_text, file_path)
 
-        # Ищем строку с заголовками (Счет, Контрагенты, ...)
-        start_row = None
-        for i in range(len(df)):
-            row_str = ' '.join([str(c) for c in df.iloc[i] if pd.notna(c)]).lower()
-            if 'счет' in row_str and 'контрагенты' in row_str:
-                start_row = i + 1
-                break
-        if start_row is None:
-            raise ValueError("Не удалось найти заголовки в ОСВ 19")
+        print(f"\n--- ОСВ 19: {os.path.basename(file_path)} ---")
+        for i in range(min(10, len(df))):
+            print(f"Строка {i}: {df.iloc[i].tolist()}")
 
+        # По данным из распечатки: заголовки в строках 7 и 8, данные начинаются со строки 9 (индекс 9)
+        start_row = 9
         data_rows = []
         for idx in range(start_row, len(df)):
             row = df.iloc[idx]
@@ -709,7 +728,7 @@ class MainWindow(QMainWindow):
             kontragent = str(row[1]).strip() if len(row) > 1 and not pd.isna(row[1]) else ''
             if not kontragent:
                 continue
-            vat = self._clean_number(row[5]) if len(row) > 5 else 0.0  # оборот дебет (входящий НДС)
+            vat = self._clean_number(row[5]) if len(row) > 5 else 0.0  # оборот дебет
             if vat == 0:
                 continue
             data_rows.append({
@@ -729,10 +748,13 @@ class MainWindow(QMainWindow):
                 'quantity': 0
             })
         if not data_rows:
+            print("Нет данных в ОСВ 19")
             return 0
         df_result = pd.DataFrame(data_rows)
         df_result['quantity'] = df_result['quantity'].astype(int)
-        return self.db.save_data(df_result)
+        saved = self.db.save_data(df_result)
+        print(f"Сохранено {saved} записей из ОСВ 19")
+        return saved
 
     # ========== ОСВ 41 (по номенклатуре) ==========
     def _parse_osv_41_detailed(self, file_path):
@@ -741,26 +763,21 @@ class MainWindow(QMainWindow):
         company = self._extract_company_from_text(header_text)
         period = self._extract_period_from_text(header_text, file_path)
 
-        # Ищем заголовок (Счет, Номенклатура, ...)
-        start_row = None
-        for i in range(len(df)):
-            row_str = ' '.join([str(c) for c in df.iloc[i] if pd.notna(c)]).lower()
-            if 'счет' in row_str and 'номенклатура' in row_str:
-                start_row = i + 1
-                break
-        if start_row is None:
-            raise ValueError("Не удалось найти заголовки в ОСВ 41")
+        print(f"\n--- ОСВ 41: {os.path.basename(file_path)} ---")
+        for i in range(min(10, len(df))):
+            print(f"Строка {i}: {df.iloc[i].tolist()}")
 
+        # По данным из распечатки: данные начинаются со строки 8 (индекс 7)
+        start_row = 7
         data_rows = []
         for idx in range(start_row, len(df)):
             row = df.iloc[idx]
             if len(row) < 2 or pd.isna(row[1]) or str(row[1]).strip() == '':
                 continue
-            nomenclature = str(row[1]).strip()
-            if 'итого' in nomenclature.lower():
+            if 'итого' in str(row[1]).lower():
                 continue
-            # Оборот кредит (списание) – себестоимость проданных товаров (индекс 7)
-            cost = self._clean_number(row[7]) if len(row) > 7 else 0.0
+            nomenclature = str(row[1]).strip()
+            cost = self._clean_number(row[7]) if len(row) > 7 else 0.0  # оборот кредит (списание)
             if cost == 0:
                 continue
             data_rows.append({
@@ -780,10 +797,13 @@ class MainWindow(QMainWindow):
                 'quantity': 0
             })
         if not data_rows:
+            print("Нет данных в ОСВ 41")
             return 0
         df_result = pd.DataFrame(data_rows)
         df_result['quantity'] = df_result['quantity'].astype(int)
-        return self.db.save_data(df_result)
+        saved = self.db.save_data(df_result)
+        print(f"Сохранено {saved} записей из ОСВ 41")
+        return saved
 
     # ========== ОСВ 44 (по статьям затрат) ==========
     def _parse_osv_44_detailed(self, file_path):
@@ -792,15 +812,12 @@ class MainWindow(QMainWindow):
         company = self._extract_company_from_text(header_text)
         period = self._extract_period_from_text(header_text, file_path)
 
-        start_row = None
-        for i in range(len(df)):
-            row_str = ' '.join([str(c) for c in df.iloc[i] if pd.notna(c)]).lower()
-            if 'счет' in row_str and 'статьи затрат' in row_str:
-                start_row = i + 1
-                break
-        if start_row is None:
-            raise ValueError("Не удалось найти заголовки в ОСВ 44")
+        print(f"\n--- ОСВ 44: {os.path.basename(file_path)} ---")
+        for i in range(min(10, len(df))):
+            print(f"Строка {i}: {df.iloc[i].tolist()}")
 
+        # Данные начинаются со строки 9 (индекс 8), после заголовков и строки "Период"
+        start_row = 8
         data_rows = []
         for idx in range(start_row, len(df)):
             row = df.iloc[idx]
@@ -817,39 +834,43 @@ class MainWindow(QMainWindow):
                 'company': company,
                 'product_group': 'Расходы на продажу',
                 'nomenclature': article,
-                'revenue': 0,
-                'vat_in_revenue': 0,
-                'cost_price': 0,
-                'gross_profit': 0,
+                'revenue': 0.0,
+                'vat_in_revenue': 0.0,
+                'cost_price': 0.0,
+                'gross_profit': 0.0,
                 'sales_expenses': expenses,
-                'other_income_expenses': 0,
-                'net_profit': 0,
-                'vat_deductible': 0,
-                'vat_to_budget': 0,
+                'other_income_expenses': 0.0,
+                'net_profit': 0.0,
+                'vat_deductible': 0.0,
+                'vat_to_budget': 0.0,
                 'quantity': 0
             })
         if not data_rows:
+            print("Нет данных в ОСВ 44")
             return 0
         df_result = pd.DataFrame(data_rows)
         df_result['quantity'] = df_result['quantity'].astype(int)
-        return self.db.save_data(df_result)
+        # Принудительно конвертируем все числовые колонки
+        for col in ['revenue','vat_in_revenue','cost_price','gross_profit','sales_expenses','other_income_expenses','net_profit','vat_deductible','vat_to_budget']:
+            df_result[col] = pd.to_numeric(df_result[col], errors='coerce').fillna(0)
+        saved = self.db.save_data(df_result)
+        print(f"Сохранено {saved} записей из ОСВ 44")
+        return saved
 
-    # ========== ОСВ 90 (по субсчетам) ==========
+
+    # ОСВ 90 (данные начинаются со строки 5, индекс 4)
     def _parse_osv_90_detailed(self, file_path):
         df = pd.read_excel(file_path, header=None)
         header_text = self._flatten_text(df, slice(0, 5))
         company = self._extract_company_from_text(header_text)
         period = self._extract_period_from_text(header_text, file_path)
 
-        start_row = None
-        for i in range(len(df)):
-            row_str = ' '.join([str(c) for c in df.iloc[i] if pd.notna(c)]).lower()
-            if 'счет' in row_str and 'показатели' in row_str:
-                start_row = i + 1
-                break
-        if start_row is None:
-            raise ValueError("Не удалось найти заголовки в ОСВ 90")
+        print(f"\n--- ОСВ 90: {os.path.basename(file_path)} ---")
+        for i in range(min(10, len(df))):
+            print(f"Строка {i}: {df.iloc[i].tolist()}")
 
+        # Данные начинаются со строки 5 (индекс 4)
+        start_row = 4
         data_rows = []
         for idx in range(start_row, len(df)):
             row = df.iloc[idx]
@@ -858,7 +879,6 @@ class MainWindow(QMainWindow):
             account = str(row[0]).strip()
             if 'итого' in account.lower():
                 break
-            # Определяем тип субсчета
             if '90.01' in account:
                 revenue = self._clean_number(row[5]) if len(row) > 5 else 0.0  # оборот кредит
                 if revenue != 0:
@@ -868,14 +888,14 @@ class MainWindow(QMainWindow):
                         'product_group': 'Выручка',
                         'nomenclature': account,
                         'revenue': revenue,
-                        'vat_in_revenue': 0,
-                        'cost_price': 0,
-                        'gross_profit': 0,
-                        'sales_expenses': 0,
-                        'other_income_expenses': 0,
-                        'net_profit': 0,
-                        'vat_deductible': 0,
-                        'vat_to_budget': 0,
+                        'vat_in_revenue': 0.0,
+                        'cost_price': 0.0,
+                        'gross_profit': 0.0,
+                        'sales_expenses': 0.0,
+                        'other_income_expenses': 0.0,
+                        'net_profit': 0.0,
+                        'vat_deductible': 0.0,
+                        'vat_to_budget': 0.0,
                         'quantity': 0
                     })
             elif '90.02' in account:
@@ -886,41 +906,46 @@ class MainWindow(QMainWindow):
                         'company': company,
                         'product_group': 'Себестоимость',
                         'nomenclature': account,
-                        'revenue': 0,
-                        'vat_in_revenue': 0,
+                        'revenue': 0.0,
+                        'vat_in_revenue': 0.0,
                         'cost_price': cost,
-                        'gross_profit': 0,
-                        'sales_expenses': 0,
-                        'other_income_expenses': 0,
-                        'net_profit': 0,
-                        'vat_deductible': 0,
-                        'vat_to_budget': 0,
+                        'gross_profit': 0.0,
+                        'sales_expenses': 0.0,
+                        'other_income_expenses': 0.0,
+                        'net_profit': 0.0,
+                        'vat_deductible': 0.0,
+                        'vat_to_budget': 0.0,
                         'quantity': 0
                     })
             elif '90.03' in account:
-                vat = self._clean_number(row[4]) if len(row) > 4 else 0.0  # оборот дебет (НДС)
+                vat = self._clean_number(row[4]) if len(row) > 4 else 0.0
                 if vat != 0:
                     data_rows.append({
                         'period': period,
                         'company': company,
                         'product_group': 'НДС начисленный',
                         'nomenclature': account,
-                        'revenue': 0,
+                        'revenue': 0.0,
                         'vat_in_revenue': vat,
-                        'cost_price': 0,
-                        'gross_profit': 0,
-                        'sales_expenses': 0,
-                        'other_income_expenses': 0,
-                        'net_profit': 0,
-                        'vat_deductible': 0,
+                        'cost_price': 0.0,
+                        'gross_profit': 0.0,
+                        'sales_expenses': 0.0,
+                        'other_income_expenses': 0.0,
+                        'net_profit': 0.0,
+                        'vat_deductible': 0.0,
                         'vat_to_budget': vat,
                         'quantity': 0
                     })
         if not data_rows:
+            print("Нет данных в ОСВ 90")
             return 0
         df_result = pd.DataFrame(data_rows)
         df_result['quantity'] = df_result['quantity'].astype(int)
-        return self.db.save_data(df_result)
+        for col in ['revenue','vat_in_revenue','cost_price','gross_profit','sales_expenses','other_income_expenses','net_profit','vat_deductible','vat_to_budget']:
+            df_result[col] = pd.to_numeric(df_result[col], errors='coerce').fillna(0)
+        saved = self.db.save_data(df_result)
+        print(f"Сохранено {saved} записей из ОСВ 90")
+        return saved
 
     # ========== ОСВ 91 (по субсчетам) ==========
     def _parse_osv_91_detailed(self, file_path):
@@ -929,15 +954,12 @@ class MainWindow(QMainWindow):
         company = self._extract_company_from_text(header_text)
         period = self._extract_period_from_text(header_text, file_path)
 
-        start_row = None
-        for i in range(len(df)):
-            row_str = ' '.join([str(c) for c in df.iloc[i] if pd.notna(c)]).lower()
-            if 'счет' in row_str and 'прочие доходы и расходы' in row_str:
-                start_row = i + 1
-                break
-        if start_row is None:
-            raise ValueError("Не удалось найти заголовки в ОСВ 91")
+        print(f"\n--- ОСВ 91: {os.path.basename(file_path)} ---")
+        for i in range(min(10, len(df))):
+            print(f"Строка {i}: {df.iloc[i].tolist()}")
 
+        # Данные начинаются со строки 8 (индекс 7), после заголовков и строки "Период"
+        start_row = 7
         data_rows = []
         for idx in range(start_row, len(df)):
             row = df.iloc[idx]
@@ -955,14 +977,14 @@ class MainWindow(QMainWindow):
                         'product_group': 'Прочие доходы',
                         'nomenclature': account,
                         'revenue': income,
-                        'vat_in_revenue': 0,
-                        'cost_price': 0,
-                        'gross_profit': 0,
-                        'sales_expenses': 0,
+                        'vat_in_revenue': 0.0,
+                        'cost_price': 0.0,
+                        'gross_profit': 0.0,
+                        'sales_expenses': 0.0,
                         'other_income_expenses': income,
-                        'net_profit': 0,
-                        'vat_deductible': 0,
-                        'vat_to_budget': 0,
+                        'net_profit': 0.0,
+                        'vat_deductible': 0.0,
+                        'vat_to_budget': 0.0,
                         'quantity': 0
                     })
             elif '91.02' in account:
@@ -973,22 +995,27 @@ class MainWindow(QMainWindow):
                         'company': company,
                         'product_group': 'Прочие расходы',
                         'nomenclature': account,
-                        'revenue': 0,
-                        'vat_in_revenue': 0,
-                        'cost_price': 0,
-                        'gross_profit': 0,
-                        'sales_expenses': 0,
+                        'revenue': 0.0,
+                        'vat_in_revenue': 0.0,
+                        'cost_price': 0.0,
+                        'gross_profit': 0.0,
+                        'sales_expenses': 0.0,
                         'other_income_expenses': -expense,
-                        'net_profit': 0,
-                        'vat_deductible': 0,
-                        'vat_to_budget': 0,
+                        'net_profit': 0.0,
+                        'vat_deductible': 0.0,
+                        'vat_to_budget': 0.0,
                         'quantity': 0
                     })
         if not data_rows:
+            print("Нет данных в ОСВ 91")
             return 0
         df_result = pd.DataFrame(data_rows)
         df_result['quantity'] = df_result['quantity'].astype(int)
-        return self.db.save_data(df_result)
+        for col in ['revenue','vat_in_revenue','cost_price','gross_profit','sales_expenses','other_income_expenses','net_profit','vat_deductible','vat_to_budget']:
+            df_result[col] = pd.to_numeric(df_result[col], errors='coerce').fillna(0)
+        saved = self.db.save_data(df_result)
+        print(f"Сохранено {saved} записей из ОСВ 91")
+        return saved
 
     # ========== ОТЧЁТ ПО ПРОДАЖАМ (по товарам и месяцам) ==========
     def _parse_sales_report_detailed(self, file_path):
@@ -997,6 +1024,10 @@ class MainWindow(QMainWindow):
         company = self._extract_company_from_text(header_text)
         period_base = self._extract_period_from_text(header_text, file_path)
         year = period_base.split('.')[1] if '.' in period_base else period_base
+
+        print(f"\n--- Отчёт по продажам: {os.path.basename(file_path)} ---")
+        for i in range(min(10, len(df))):
+            print(f"Строка {i}: {df.iloc[i].tolist()}")
 
         # Ищем строку с "Номенклатура"
         start_row = None
@@ -1009,7 +1040,6 @@ class MainWindow(QMainWindow):
 
         # Определяем месяцы
         months = []
-        # Проверяем строку start_row и следующую
         for r in [start_row, start_row+1]:
             if r >= len(df):
                 continue
@@ -1057,10 +1087,64 @@ class MainWindow(QMainWindow):
                     'quantity': int(qty) if qty else 0
                 })
         if not data_rows:
+            print("Нет данных в отчёте по продажам")
             return 0
         df_result = pd.DataFrame(data_rows)
         df_result['quantity'] = df_result['quantity'].astype(int)
-        return self.db.save_data(df_result)
+        saved = self.db.save_data(df_result)
+        print(f"Сохранено {saved} записей из отчёта по продажам")
+        return saved
+
+    # ========== Импорт сводного шаблона (старая логика) ==========
+    def _import_legacy(self, file_path):
+        """Загрузка сводного файла (с русскими колонками) - для совместимости"""
+        df = pd.read_excel(file_path)
+        column_mapping = {
+            'Период': 'period',
+            'Компания': 'company',
+            'Товарная группа': 'product_group',
+            'Номенклатура': 'nomenclature',
+            'Выручка (с НДС)': 'revenue',
+            'Выручка': 'revenue',
+            'НДС в выручке': 'vat_in_revenue',
+            'Себестоимость': 'cost_price',
+            'Валовая прибыль': 'gross_profit',
+            'Расходы на продажу': 'sales_expenses',
+            'Прочие доходы/расходы': 'other_income_expenses',
+            'Чистая прибыль': 'net_profit',
+            'НДС к вычету': 'vat_deductible',
+            'НДС К УПЛАТЕ': 'vat_to_budget',
+            'НДС к уплате': 'vat_to_budget',
+            'Оборот (кол-во)': 'quantity',
+            'Количество': 'quantity'
+        }
+        df.rename(columns=lambda x: column_mapping.get(str(x).strip(), str(x).strip()), inplace=True)
+        required = ['period', 'company', 'product_group', 'nomenclature', 'revenue',
+                    'vat_in_revenue', 'cost_price', 'vat_to_budget', 'quantity']
+        missing = [c for c in required if c not in df.columns]
+        if missing:
+            ru_names = {'period':'Период','company':'Компания','product_group':'Товарная группа',
+                        'nomenclature':'Номенклатура','revenue':'Выручка (с НДС)','vat_in_revenue':'НДС в выручке',
+                        'cost_price':'Себестоимость','vat_to_budget':'НДС к уплате','quantity':'Количество'}
+            missing_ru = [ru_names.get(c,c) for c in missing]
+            raise ValueError(
+                f"Файл не является сводным отчётом.\n"
+                f"Отсутствуют колонки: {', '.join(missing_ru)}\n"
+                "Используйте кнопку «Скачать шаблон» для подготовки данных."
+            )
+        if 'gross_profit' not in df.columns:
+            df['gross_profit'] = df['revenue'] - df['vat_in_revenue'] - df['cost_price']
+        if 'net_profit' not in df.columns:
+            df['net_profit'] = df['gross_profit']
+            if 'sales_expenses' in df.columns:
+                df['net_profit'] -= df['sales_expenses']
+            if 'other_income_expenses' in df.columns:
+                df['net_profit'] += df['other_income_expenses']
+        for col in ['sales_expenses','other_income_expenses','vat_deductible']:
+            if col not in df.columns:
+                df[col] = 0
+        df['quantity'] = df['quantity'].fillna(0).astype(int)
+        return self.db.save_data(df)
     
         
     # ========== КНИГА ПОКУПОК (построчно) ==========    
@@ -1927,15 +2011,17 @@ class MainWindow(QMainWindow):
             self.update_charts()
     
     def update_totals(self):
-        """Обновление итоговых значений"""
         if self.current_df is not None and not self.current_df.empty:
+            # Принудительно конвертируем числовые колонки в float
+            for col in ['revenue', 'vat_to_budget', 'net_profit']:
+                if col in self.current_df.columns:
+                    self.current_df[col] = pd.to_numeric(self.current_df[col], errors='coerce').fillna(0)
             total_revenue = self.current_df['revenue'].sum()
             total_vat = self.current_df['vat_to_budget'].sum()
             total_profit = self.current_df['net_profit'].sum()
-            
             self.revenue_label.setText(f"Выручка: {total_revenue:,.0f} ₽".replace(",", " "))
             self.vat_label.setText(f"НДС к уплате: {total_vat:,.0f} ₽".replace(",", " "))
-            self.profit_label.setText(f"Чистая прибыль: {total_profit:,.0f} ₽".replace(",", " "))
+        self.profit_label.setText(f"Чистая прибыль: {total_profit:,.0f} ₽".replace(",", " "))
     
     def update_charts(self):
         if self.current_df is None or self.current_df.empty:
@@ -2366,7 +2452,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v1.7.0</p>
+        <p><b>Версия программы:</b> v2.0.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
