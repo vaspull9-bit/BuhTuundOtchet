@@ -586,34 +586,68 @@ class MainWindow(QMainWindow):
         period = self._extract_period_from_text(header_text, file_path)
 
         print(f"\n--- Книга покупок: {os.path.basename(file_path)} ---")
-        for i in range(min(10, len(df))):
+        for i in range(min(15, len(df))):
             print(f"Строка {i}: {df.iloc[i].tolist()}")
 
-        # Находим строку с заголовками колонок (где есть "№ п/п")
+        # Находим строку с номерами колонок (1, 2, 3, ...)
         start_row = None
         for i in range(len(df)):
-            row_str = ' '.join([str(c) for c in df.iloc[i] if pd.notna(c)])
-            if '№' in row_str and 'п/п' in row_str:
-                start_row = i + 1
-                break
+            row = df.iloc[i]
+            # Проверяем, что первые два элемента – '1' и '2' (как числа или строки)
+            if len(row) > 1:
+                first = str(row[0]).strip()
+                second = str(row[1]).strip()
+                if first == '1' and second == '2':
+                    start_row = i + 1
+                    break
         if start_row is None:
-            raise ValueError("Не удалось найти заголовки в книге покупок")
+            raise ValueError("Не удалось найти строку с номерами колонок в книге покупок")
 
         data_rows = []
         for idx in range(start_row, len(df)):
             row = df.iloc[idx]
             if pd.isna(row[0]) or str(row[0]).strip() == '':
                 continue
+
+            # Если встретили "Всего" – извлекаем итоговую сумму НДС
             if 'всего' in str(row[0]).lower():
+                total_vat = self._clean_number(row[14]) if len(row) > 14 else 0.0  # колонка 15
+                if total_vat == 0.0 and len(row) > 59:
+                    total_vat = self._clean_number(row[59])  # запасной вариант
+                if total_vat != 0.0:
+                    data_rows.append({
+                        'period': period,
+                        'company': company,
+                        'product_group': 'НДС к вычету',
+                        'nomenclature': 'Итого по книге покупок',
+                        'revenue': 0.0,
+                        'vat_in_revenue': 0.0,
+                        'cost_price': 0.0,
+                        'gross_profit': 0.0,
+                        'sales_expenses': 0.0,
+                        'other_income_expenses': 0.0,
+                        'net_profit': 0.0,
+                        'vat_deductible': total_vat,
+                        'vat_to_budget': 0.0,
+                        'quantity': 0
+                    })
                 break
 
-            seller = str(row[8]) if len(row) > 8 and not pd.isna(row[8]) else ''
+            # Извлекаем данные по каждой строке
+            seller = str(row[8]).strip() if len(row) > 8 and not pd.isna(row[8]) else ''
             if not seller:
                 continue
-            cost = self._clean_number(row[13]) if len(row) > 13 else 0.0   # стоимость покупок с НДС
-            vat = self._clean_number(row[18]) if len(row) > 18 else 0.0    # сумма НДС
 
-            if cost == 0 and vat == 0:
+            # Стоимость покупок (с НДС) – колонка 14 (индекс 13)
+            cost = self._clean_number(row[13]) if len(row) > 13 else 0.0
+            # Сумма НДС – колонка 15 (индекс 14)
+            vat = self._clean_number(row[14]) if len(row) > 14 else 0.0
+
+            # Если НДС не найден, пробуем колонку 19 (индекс 18) как запасной вариант
+            if vat == 0.0 and len(row) > 18:
+                vat = self._clean_number(row[18])
+
+            if cost == 0.0 and vat == 0.0:
                 continue
 
             data_rows.append({
@@ -622,22 +656,32 @@ class MainWindow(QMainWindow):
                 'product_group': 'Покупки',
                 'nomenclature': seller.strip(),
                 'revenue': cost,
-                'vat_in_revenue': 0,
-                'cost_price': 0,
-                'gross_profit': 0,
-                'sales_expenses': 0,
-                'other_income_expenses': 0,
-                'net_profit': 0,
+                'vat_in_revenue': 0.0,
+                'cost_price': 0.0,
+                'gross_profit': 0.0,
+                'sales_expenses': 0.0,
+                'other_income_expenses': 0.0,
+                'net_profit': 0.0,
                 'vat_deductible': vat,
-                'vat_to_budget': 0,
+                'vat_to_budget': 0.0,
                 'quantity': 0
             })
 
         if not data_rows:
             print("Нет данных в книге покупок")
             return 0
+
         df_result = pd.DataFrame(data_rows)
         df_result['quantity'] = df_result['quantity'].astype(int)
+
+        # Приведение числовых колонок к float (защита от байтов и NaN)
+        numeric_cols = ['revenue', 'vat_in_revenue', 'cost_price', 'gross_profit',
+                        'sales_expenses', 'other_income_expenses', 'net_profit',
+                        'vat_deductible', 'vat_to_budget']
+        for col in numeric_cols:
+            if col in df_result.columns:
+                df_result[col] = pd.to_numeric(df_result[col], errors='coerce').fillna(0.0)
+
         saved = self.db.save_data(df_result)
         print(f"Сохранено {saved} записей из книги покупок")
         return saved
