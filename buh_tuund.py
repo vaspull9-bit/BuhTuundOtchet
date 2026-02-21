@@ -24,6 +24,8 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.fonts import addMapping
 import re
 from datetime import datetime
+from PyQt6.QtWidgets import QSplitter, QTreeWidget, QTreeWidgetItem, QAbstractItemView, QPushButton
+from PyQt6.QtCore import Qt
 
 # ==================== БАЗА ДАННЫХ ====================
 class DatabaseManager:
@@ -123,7 +125,7 @@ class MainWindow(QMainWindow):
         self.init_ui()
     
     def init_ui(self):
-        self.setWindowTitle("BuhTuundOtchet v1.0")
+        self.setWindowTitle("BuhTuundOtchet v3.0.0")
         self.setGeometry(100, 100, 1400, 800)
         self.setStyleSheet("""
             QMainWindow {
@@ -177,54 +179,13 @@ class MainWindow(QMainWindow):
         # Создание современного тулбара
         self.create_toolbar()
 
-        # Создаём QSplitter для разделения на панели
-        self.splitter = QSplitter(Qt.Orientation.Horizontal)
-
-        # Левая панель с деревом файлов
-        self.left_panel = QWidget()
-        left_layout = QVBoxLayout(self.left_panel)
-        left_layout.setContentsMargins(2, 2, 2, 2)
-
-        # Модель дерева с чекбоксами
-        self.tree_model = QFileSystemModel()
-        self.tree_model.setRootPath('')
-        self.tree_view = QTreeView()
-        self.tree_view.setModel(self.tree_model)
-        self.tree_view.setRootIndex(self.tree_model.index(''))
-        self.tree_view.setHeaderHidden(True)
-        self.tree_view.setAnimated(True)
-        self.tree_view.setIndentation(20)
-        self.tree_view.setSortingEnabled(True)
-
-        # Включаем чекбоксы (для выбора файлов)
-        self.tree_view.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        # Примечание: стандартная модель не поддерживает чекбоксы, но можно сделать через делегат.
-        # Для простоты пока оставим без чекбоксов, либо используем QTreeWidget с чекбоксами.
-        # Реализуем через QTreeWidget:
-
-        self.tree_widget = QTreeWidget()
-        self.tree_widget.setHeaderHidden(True)
-        self.tree_widget.itemChanged.connect(self.on_item_changed)
-
-        left_layout.addWidget(self.tree_widget)
-
-        # Правая панель (основной контент) – ваш существующий central widget
-        right_panel = self.centralWidget()  # предполагается, что central widget уже создан
-
-        # Добавляем панели в сплиттер
-        self.splitter.addWidget(self.left_panel)
-        self.splitter.addWidget(right_panel)
-        self.splitter.setSizes([200, self.width() - 200])  # начальная ширина
-
-        # Устанавливаем сплиттер как центральный виджет
-        self.setCentralWidget(self.splitter)
-
         
+        # ===================================================================
         # Центральный виджет с таблицей и графиками
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
-        
+
         # Панель фильтров
         filter_layout = QHBoxLayout()
         
@@ -262,6 +223,50 @@ class MainWindow(QMainWindow):
         
         filter_layout.addStretch()
         main_layout.addLayout(filter_layout)
+
+        # ==============================  боковая панель =====================================
+        # Создаём QSplitter для разделения на панели
+        # Создаём главный сплиттер
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # --- Левая панель с деревом ---
+        self.left_panel = QWidget()
+        left_layout = QVBoxLayout(self.left_panel)
+        left_layout.setContentsMargins(2, 2, 2, 2)
+
+        # Кнопка выбора корневой папки (над деревом)
+        self.select_root_btn = QPushButton("Выбрать папку...")
+        self.select_root_btn.clicked.connect(self.choose_root_folder)
+        left_layout.addWidget(self.select_root_btn)
+
+        # Дерево с чекбоксами
+        self.tree_widget = QTreeWidget()
+        self.tree_widget.setHeaderHidden(True)
+        self.tree_widget.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        left_layout.addWidget(self.tree_widget)
+
+        # Кнопка "Обработать" под деревом
+        self.process_selected_btn = QPushButton("Обработать выбранное")
+        self.process_selected_btn.clicked.connect(self.process_selected_files)
+        left_layout.addWidget(self.process_selected_btn)
+
+        # --- Правая панель (ваш существующий центральный виджет) ---
+        # Предполагается, что у вас уже есть central_widget со всем содержимым
+        # Если нет, создайте его аналогично вашему коду
+        # В вашем коде central_widget, вероятно, уже создан и назначен через setCentralWidget.
+        # Чтобы не нарушить структуру, мы извлечём его из self.centralWidget() после того, как он будет создан.
+        # Убедитесь, что перед этим вы уже создали и назначили центральный виджет.
+        right_panel = self.centralWidget()  # должен быть создан ранее
+
+        # Добавляем панели в сплиттер
+        self.splitter.addWidget(self.left_panel)
+        self.splitter.addWidget(right_panel)
+        self.splitter.setSizes([250, self.width() - 250])
+
+        # Устанавливаем сплиттер как новый центральный виджет
+        self.setCentralWidget(self.splitter)
+
+        #======================================================================================
         
         # Создание вкладок
         self.tab_widget = QTabWidget()
@@ -365,6 +370,12 @@ class MainWindow(QMainWindow):
         
         # Загрузка начальных данных
         self.load_initial_data()
+    # ==================================================================================
+    # Методы для работы с деревом
+    def choose_root_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Выберите корневую папку")
+        if folder:
+            self.load_folder_tree(folder)
 
     def load_folder_tree(self, folder_path):
         self.tree_widget.clear()
@@ -374,10 +385,11 @@ class MainWindow(QMainWindow):
         root_item.setCheckState(0, Qt.CheckState.Unchecked)
         self.tree_widget.addTopLevelItem(root_item)
         self._add_folder_contents(folder_path, root_item)
+        root_item.setExpanded(True)
 
     def _add_folder_contents(self, path, parent_item):
         try:
-            for item in os.listdir(path):
+            for item in sorted(os.listdir(path)):
                 full_path = os.path.join(path, item)
                 if os.path.isdir(full_path):
                     child = QTreeWidgetItem([item])
@@ -395,10 +407,49 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Ошибка чтения папки {path}: {e}")
 
-    def on_item_changed(self, item, column):
-        # Обработка изменения чекбокса (можно добавить логику)
-        pass
+    def get_checked_files(self, item=None, files=None):
+        """Рекурсивно собирает пути всех отмеченных файлов."""
+        if files is None:
+            files = []
+            root = self.tree_widget.topLevelItem(0)
+            if root is None:
+                return files
+            self.get_checked_files(root, files)
+            return files
 
+        # Если элемент отмечен
+        if item.checkState(0) == Qt.CheckState.Checked:
+            file_path = item.data(0, Qt.ItemDataRole.UserRole)
+            if file_path and os.path.isfile(file_path):
+                files.append(file_path)
+        # Если элемент частично отмечен (только для папок) – можно игнорировать или обрабатывать как папку
+        # Но мы будем обрабатывать только явно отмеченные файлы.
+        # Если отмечена папка, добавим все файлы из неё рекурсивно.
+        elif item.checkState(0) == Qt.CheckState.Checked and os.path.isdir(item.data(0, Qt.ItemDataRole.UserRole)):
+            # Если папка отмечена, добавим все файлы внутри (рекурсивно)
+            folder = item.data(0, Qt.ItemDataRole.UserRole)
+            for root, dirs, files_in_folder in os.walk(folder):
+                for f in files_in_folder:
+                    if f.lower().endswith(('.xls', '.xlsx')):
+                        files.append(os.path.join(root, f))
+            # Дочерние элементы не нужно обходить отдельно, так как мы уже прошли всю папку.
+            # Но чтобы избежать дублирования, пропускаем детей.
+            return
+
+        # Обходим детей
+        for i in range(item.childCount()):
+            self.get_checked_files(item.child(i), files)
+
+    def process_selected_files(self):
+        """Собирает отмеченные файлы и запускает их обработку."""
+        files = self.get_checked_files()
+        if not files:
+            QMessageBox.information(self, "Ничего не выбрано", "Не выбрано ни одного файла для обработки.")
+            return
+        # Вызываем существующий process_files
+        self.process_files(files)
+
+    # ===========================================================================
     def _get_header_text(self, file_path, rows=5):
         """
         Читает первые rows строк файла как текст.
@@ -457,65 +508,46 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось создать шаблон:\n{str(e)}")
-    
+
+    # =================================================================================================
+    # Обновлённый тулбар (убираем старые кнопки)
     def create_toolbar(self):
         toolbar = QToolBar("Главная панель")
         toolbar.setMovable(False)
         toolbar.setIconSize(QSize(24, 24))
         self.addToolBar(toolbar)
 
-        load_folder_tree_action = QAction("📁 Загрузить дерево", self)
-        load_folder_tree_action.triggered.connect(self.choose_root_folder)
-        toolbar.addAction(load_folder_tree_action)
-        
-         # Кнопка загрузки файлов (мультивыбор)
-        load_files_action = QAction(QIcon.fromTheme("document-open"), "Загрузить файлы", self)
-        load_files_action.triggered.connect(self.load_files)
-        load_files_action.setShortcut("Ctrl+O")
-        toolbar.addAction(load_files_action)
+        # Убраны кнопки загрузки файлов и папки
 
-        # Кнопка загрузки папки (рекурсивно)
-        load_folder_action = QAction(QIcon.fromTheme("folder-open"), "Загрузить папку", self)
-        load_folder_action.triggered.connect(self.load_folder)
-        toolbar.addAction(load_folder_action)
-            
-        toolbar.addSeparator()
-
-         # Кнопка скачивания шаблона
-        download_template_action = QAction("📥 Скачать шаблон", self)
-        download_template_action.triggered.connect(self.download_template)
-        toolbar.addAction(download_template_action)
-        
         # Кнопка экспорта в Excel
         export_excel_action = QAction("📊 Экспорт в Excel", self)
         export_excel_action.triggered.connect(self.export_to_excel)
         toolbar.addAction(export_excel_action)
-        
+
         # Кнопка экспорта в PDF
         export_pdf_action = QAction("📄 Экспорт в PDF", self)
         export_pdf_action.triggered.connect(self.export_to_pdf)
         toolbar.addAction(export_pdf_action)
-        
+
         # Кнопка экспорта в Word
         export_word_action = QAction("📝 Экспорт в Word", self)
         export_word_action.triggered.connect(self.export_to_word)
         toolbar.addAction(export_word_action)
-        
+
         toolbar.addSeparator()
-        
+
         # Кнопка быстрого отчета
         report_action = QAction("📋 Быстрый отчет", self)
         report_action.triggered.connect(self.generate_quick_report)
         toolbar.addAction(report_action)
 
         toolbar.addSeparator()
+
         # Кнопка настроек
         settings_action = QAction("⚙️ Настройки", self)
         settings_action.triggered.connect(self.show_settings)
         toolbar.addAction(settings_action)
-                
-        toolbar.addSeparator()
-        
+
         # Кнопка "О программе"
         about_action = QAction("ℹ️ О программе", self)
         about_action.triggered.connect(self.show_about)
@@ -556,6 +588,7 @@ class MainWindow(QMainWindow):
 
         dialog.exec()
 
+    # ==================================================================================================
     # """Загрузка начальных демо-данных"""
     def load_initial_data(self):
         """Загрузка начальных демо-данных"""
@@ -667,11 +700,7 @@ class MainWindow(QMainWindow):
                 msg += f"\n... и ещё {len(error_files)-5} ошибок"
         QMessageBox.information(self, "Результат загрузки", msg)
 
-    def choose_root_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Выберите корневую папку")
-        if folder:
-            self.load_folder_tree(folder)
-
+  
     def _extract_company_from_text(self, text):
         """Извлекает название компании из текста (ищем ООО, ИП и т.п.)"""
         import re
