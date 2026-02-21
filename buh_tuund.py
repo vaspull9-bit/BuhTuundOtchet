@@ -176,6 +176,49 @@ class MainWindow(QMainWindow):
         
         # Создание современного тулбара
         self.create_toolbar()
+
+        # Создаём QSplitter для разделения на панели
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # Левая панель с деревом файлов
+        self.left_panel = QWidget()
+        left_layout = QVBoxLayout(self.left_panel)
+        left_layout.setContentsMargins(2, 2, 2, 2)
+
+        # Модель дерева с чекбоксами
+        self.tree_model = QFileSystemModel()
+        self.tree_model.setRootPath('')
+        self.tree_view = QTreeView()
+        self.tree_view.setModel(self.tree_model)
+        self.tree_view.setRootIndex(self.tree_model.index(''))
+        self.tree_view.setHeaderHidden(True)
+        self.tree_view.setAnimated(True)
+        self.tree_view.setIndentation(20)
+        self.tree_view.setSortingEnabled(True)
+
+        # Включаем чекбоксы (для выбора файлов)
+        self.tree_view.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        # Примечание: стандартная модель не поддерживает чекбоксы, но можно сделать через делегат.
+        # Для простоты пока оставим без чекбоксов, либо используем QTreeWidget с чекбоксами.
+        # Реализуем через QTreeWidget:
+
+        self.tree_widget = QTreeWidget()
+        self.tree_widget.setHeaderHidden(True)
+        self.tree_widget.itemChanged.connect(self.on_item_changed)
+
+        left_layout.addWidget(self.tree_widget)
+
+        # Правая панель (основной контент) – ваш существующий central widget
+        right_panel = self.centralWidget()  # предполагается, что central widget уже создан
+
+        # Добавляем панели в сплиттер
+        self.splitter.addWidget(self.left_panel)
+        self.splitter.addWidget(right_panel)
+        self.splitter.setSizes([200, self.width() - 200])  # начальная ширина
+
+        # Устанавливаем сплиттер как центральный виджет
+        self.setCentralWidget(self.splitter)
+
         
         # Центральный виджет с таблицей и графиками
         central_widget = QWidget()
@@ -323,6 +366,39 @@ class MainWindow(QMainWindow):
         # Загрузка начальных данных
         self.load_initial_data()
 
+    def load_folder_tree(self, folder_path):
+        self.tree_widget.clear()
+        root_item = QTreeWidgetItem([os.path.basename(folder_path)])
+        root_item.setData(0, Qt.ItemDataRole.UserRole, folder_path)
+        root_item.setFlags(root_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        root_item.setCheckState(0, Qt.CheckState.Unchecked)
+        self.tree_widget.addTopLevelItem(root_item)
+        self._add_folder_contents(folder_path, root_item)
+
+    def _add_folder_contents(self, path, parent_item):
+        try:
+            for item in os.listdir(path):
+                full_path = os.path.join(path, item)
+                if os.path.isdir(full_path):
+                    child = QTreeWidgetItem([item])
+                    child.setData(0, Qt.ItemDataRole.UserRole, full_path)
+                    child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    child.setCheckState(0, Qt.CheckState.Unchecked)
+                    parent_item.addChild(child)
+                    self._add_folder_contents(full_path, child)
+                elif item.lower().endswith(('.xls', '.xlsx')):
+                    child = QTreeWidgetItem([item])
+                    child.setData(0, Qt.ItemDataRole.UserRole, full_path)
+                    child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    child.setCheckState(0, Qt.CheckState.Unchecked)
+                    parent_item.addChild(child)
+        except Exception as e:
+            print(f"Ошибка чтения папки {path}: {e}")
+
+    def on_item_changed(self, item, column):
+        # Обработка изменения чекбокса (можно добавить логику)
+        pass
+
     def _get_header_text(self, file_path, rows=5):
         """
         Читает первые rows строк файла как текст.
@@ -387,6 +463,10 @@ class MainWindow(QMainWindow):
         toolbar.setMovable(False)
         toolbar.setIconSize(QSize(24, 24))
         self.addToolBar(toolbar)
+
+        load_folder_tree_action = QAction("📁 Загрузить дерево", self)
+        load_folder_tree_action.triggered.connect(self.choose_root_folder)
+        toolbar.addAction(load_folder_tree_action)
         
          # Кнопка загрузки файлов (мультивыбор)
         load_files_action = QAction(QIcon.fromTheme("document-open"), "Загрузить файлы", self)
@@ -427,14 +507,56 @@ class MainWindow(QMainWindow):
         report_action = QAction("📋 Быстрый отчет", self)
         report_action.triggered.connect(self.generate_quick_report)
         toolbar.addAction(report_action)
-        
+
+        toolbar.addSeparator()
+        # Кнопка настроек
+        settings_action = QAction("⚙️ Настройки", self)
+        settings_action.triggered.connect(self.show_settings)
+        toolbar.addAction(settings_action)
+                
         toolbar.addSeparator()
         
         # Кнопка "О программе"
         about_action = QAction("ℹ️ О программе", self)
         about_action.triggered.connect(self.show_about)
         toolbar.addAction(about_action)
-    
+
+
+    def show_settings(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Настройки")
+        dialog.setModal(True)
+        layout = QVBoxLayout(dialog)
+
+        # Папка для загрузки
+        load_layout = QHBoxLayout()
+        load_layout.addWidget(QLabel("Папка для загрузки:"))
+        self.load_folder_edit = QLineEdit()
+        load_layout.addWidget(self.load_folder_edit)
+        load_btn = QPushButton("Обзор...")
+        load_btn.clicked.connect(lambda: self._choose_folder(self.load_folder_edit))
+        load_layout.addWidget(load_btn)
+        layout.addLayout(load_layout)
+
+        # Папка для выгрузки
+        export_layout = QHBoxLayout()
+        export_layout.addWidget(QLabel("Папка для выгрузки:"))
+        self.export_folder_edit = QLineEdit()
+        export_layout.addWidget(self.export_folder_edit)
+        export_btn = QPushButton("Обзор...")
+        export_btn.clicked.connect(lambda: self._choose_folder(self.export_folder_edit))
+        export_layout.addWidget(export_btn)
+        layout.addLayout(export_layout)
+
+        # Кнопки ОК/Отмена
+        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btn_box.accepted.connect(dialog.accept)
+        btn_box.rejected.connect(dialog.reject)
+        layout.addWidget(btn_box)
+
+        dialog.exec()
+
+    # """Загрузка начальных демо-данных"""
     def load_initial_data(self):
         """Загрузка начальных демо-данных"""
         demo_data = {
@@ -458,6 +580,11 @@ class MainWindow(QMainWindow):
         self.display_data(self.current_df)
         self.update_totals()
         self.update_charts()
+
+    def _choose_folder(self, line_edit):
+        folder = QFileDialog.getExistingDirectory(self, "Выберите папку")
+        if folder:
+            line_edit.setText(folder)
 
     def load_files(self):
         file_paths, _ = QFileDialog.getOpenFileNames(
@@ -539,6 +666,11 @@ class MainWindow(QMainWindow):
             if len(error_files) > 5:
                 msg += f"\n... и ещё {len(error_files)-5} ошибок"
         QMessageBox.information(self, "Результат загрузки", msg)
+
+    def choose_root_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Выберите корневую папку")
+        if folder:
+            self.load_folder_tree(folder)
 
     def _extract_company_from_text(self, text):
         """Извлекает название компании из текста (ищем ООО, ИП и т.п.)"""
@@ -682,7 +814,7 @@ class MainWindow(QMainWindow):
         for i in range(min(20, len(df))):
             print(f"Строка {i}: {df.iloc[i].tolist()}")
 
-        # Находим строку с номерами колонок (1, 2, 3, ...)
+        # Находим строку с номерами колонок (1, 2, 3...)
         header_row = None
         for i in range(len(df)):
             row = df.iloc[i]
@@ -695,27 +827,19 @@ class MainWindow(QMainWindow):
         if header_row is None:
             raise ValueError("Не удалось найти строку с номерами колонок в книге покупок")
 
-        # Теперь ищем первую строку данных, где в колонке 0 стоит '1' (или 1)
-        data_start_row = None
-        for idx in range(header_row + 1, len(df)):
-            cell0 = str(df.iloc[idx, 0]).strip()
-            if cell0 == '1' or cell0 == '1.0':
-                data_start_row = idx
-                break
-        if data_start_row is None:
-            # Если не нашли, возможно, данных нет, но может быть итоговая строка
-            data_start_row = header_row + 1  # начнём со следующей, но проверим на 'Всего'
-
+        # Данные начинаются со следующей строки
+        start_row = header_row + 1
         data_rows = []
-        for idx in range(data_start_row, len(df)):
+
+        for idx in range(start_row, len(df)):
             row = df.iloc[idx]
+            # Пропускаем пустые строки
             if pd.isna(row[0]) or str(row[0]).strip() == '':
                 continue
-            cell0 = str(row[0]).strip()
-            if 'всего' in cell0.lower():
-                total_vat = self._clean_number(row[14]) if len(row) > 14 else 0.0  # колонка 15
-                if total_vat == 0.0 and len(row) > 59:
-                    total_vat = self._clean_number(row[59])
+
+            # Проверяем на итоговую строку
+            if 'всего' in str(row[0]).lower():
+                total_vat = self._clean_number(row[14]) if len(row) > 14 else 0.0
                 if total_vat != 0.0:
                     data_rows.append({
                         'period': period,
@@ -735,17 +859,19 @@ class MainWindow(QMainWindow):
                     })
                 break
 
-            # Пропускаем строки, где первый столбец не является числом (номером строки)
-            if not cell0.replace('.','',1).replace('-','',1).isdigit():
+            # Проверяем, что строка похожа на данные (в первой колонке число)
+            if not str(row[0]).strip().replace('.','',1).replace('-','',1).isdigit():
                 continue
 
             seller = str(row[8]).strip() if len(row) > 8 and not pd.isna(row[8]) else ''
             if not seller:
                 continue
+
             cost = self._clean_number(row[13]) if len(row) > 13 else 0.0
             vat = self._clean_number(row[14]) if len(row) > 14 else 0.0
             if vat == 0.0 and len(row) > 18:
                 vat = self._clean_number(row[18])
+
             if cost == 0.0 and vat == 0.0:
                 continue
 
@@ -788,30 +914,31 @@ class MainWindow(QMainWindow):
         period = self._extract_period_from_text(header_text, file_path)
 
         print(f"\n--- Книга продаж: {os.path.basename(file_path)} ---")
-        for i in range(min(15, len(df))):
+        for i in range(min(20, len(df))):
             print(f"Строка {i}: {df.iloc[i].tolist()}")
 
-        # Находим строку с номерами колонок (обычно после сложных заголовков)
-        start_row = None
+        # Находим строку с номерами колонок (1, 2, 3...)
+        header_row = None
         for i in range(len(df)):
             row = df.iloc[i]
             if len(row) > 1:
                 first = str(row[0]).strip()
                 second = str(row[1]).strip()
-                # Проверяем, что это похоже на номера колонок (1, 2, 3...)
-                if first.isdigit() and second.isdigit() and int(first) == 1 and int(second) == 2:
-                    start_row = i + 1
+                if first == '1' and second == '2':
+                    header_row = i
                     break
-        if start_row is None:
+        if header_row is None:
             raise ValueError("Не удалось найти строку с номерами колонок в книге продаж")
 
+        start_row = header_row + 1
         data_rows = []
+
         for idx in range(start_row, len(df)):
             row = df.iloc[idx]
             if pd.isna(row[0]) or str(row[0]).strip() == '':
                 continue
+
             if 'всего' in str(row[0]).lower():
-                # Можно извлечь итоговый НДС, если нужно
                 total_vat = self._clean_number(row[14]) if len(row) > 14 else 0.0
                 if total_vat != 0.0:
                     data_rows.append({
@@ -832,13 +959,19 @@ class MainWindow(QMainWindow):
                     })
                 break
 
+            if not str(row[0]).strip().replace('.','',1).replace('-','',1).isdigit():
+                continue
+
             buyer = str(row[8]).strip() if len(row) > 8 and not pd.isna(row[8]) else ''
             if not buyer:
                 continue
+
             revenue = self._clean_number(row[13]) if len(row) > 13 else 0.0  # стоимость с НДС
-            vat = self._clean_number(row[14]) if len(row) > 14 else 0.0     # сумма НДС
+            vat = self._clean_number(row[14]) if len(row) > 14 else 0.0      # сумма НДС
+
             if revenue == 0.0 and vat == 0.0:
                 continue
+
             data_rows.append({
                 'period': period,
                 'company': company,
@@ -855,9 +988,11 @@ class MainWindow(QMainWindow):
                 'vat_to_budget': vat,
                 'quantity': 0
             })
+
         if not data_rows:
             print("Нет данных в книге продаж")
             return 0
+
         df_result = pd.DataFrame(data_rows)
         df_result['quantity'] = df_result['quantity'].astype(int)
         numeric_cols = ['revenue','vat_in_revenue','cost_price','gross_profit','sales_expenses','other_income_expenses','net_profit','vat_deductible','vat_to_budget']
@@ -2058,7 +2193,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v2.1.0</p>
+        <p><b>Версия программы:</b> v3.0.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
