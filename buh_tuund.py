@@ -125,7 +125,7 @@ class MainWindow(QMainWindow):
         self.init_ui()
     
     def init_ui(self):
-        self.setWindowTitle("BuhTuundOtchet v3.0.0")
+        self.setWindowTitle("BuhTuundOtchet v3.0.1")
         self.setGeometry(100, 100, 1400, 800)
         self.setStyleSheet("""
             QMainWindow {
@@ -2222,7 +2222,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v3.0.0</p>
+        <p><b>Версия программы:</b> v3.0.1</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
