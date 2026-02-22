@@ -24,14 +24,17 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.fonts import addMapping
 import re
 from datetime import datetime
-from PyQt6.QtWidgets import QSplitter, QTreeWidget, QTreeWidgetItem, QAbstractItemView, QPushButton
+from PyQt6.QtWidgets import QSplitter, QTreeWidget, QTreeWidgetItem, QAbstractItemView, QPushButton, QFileDialog 
 from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QSettings
 
 # ==================== БАЗА ДАННЫХ ====================
 class DatabaseManager:
     def __init__(self, db_path='buh_tuund.db'):
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.create_tables()
+        self.settings = QSettings("Компания", "BuhTuund")
+        self._load_saved_root()
 
     def create_tables(self):
         cursor = self.conn.cursor()
@@ -289,8 +292,11 @@ class MainWindow(QMainWindow):
         self.process_selected_btn = QPushButton("Обработать выбранное")
         self.process_selected_btn.clicked.connect(self.process_selected_files)
         left_layout.addWidget(self.process_selected_btn)
+        self.tree_widget.itemChanged.connect(self._handle_item_changed)
 
-        # --- Правая панель (ваш существующий центральный виджет) ---
+
+        #----------------ПРАВАЯ ПАНЕЛЬ --------------------------
+        # --- Правая панель ---------(ваш существующий центральный виджет) ---
         # Предполагается, что у вас уже есть central_widget со всем содержимым
         # Если нет, создайте его аналогично вашему коду
         # В вашем коде central_widget, вероятно, уже создан и назначен через setCentralWidget.
@@ -472,12 +478,18 @@ class MainWindow(QMainWindow):
             return 0.0
 
     # ==================================================================================
-    # Методы для работы с деревом
+    # Сохранение и загрузка настоек
     def choose_root_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Выберите корневую папку")
         if folder:
+            self.settings.setValue("root_folder", folder)
             self.load_folder_tree(folder)
-
+    def _load_saved_root(self):
+        folder = self.settings.value("root_folder", "")
+        if folder and os.path.exists(folder):
+            self.load_folder_tree(folder)
+    # ==================================================================================
+    # Методы для работы с деревом
     def load_folder_tree(self, folder_path):
         self.tree_widget.clear()
         root_item = QTreeWidgetItem([os.path.basename(folder_path)])
@@ -549,7 +561,19 @@ class MainWindow(QMainWindow):
             return
         # Вызываем существующий process_files
         self.process_files(files)
+    
+    def _handle_item_changed(self, item, column):
+        self.tree_widget.blockSignals(True)
+        state = item.checkState(0)
+        self._set_children_checkstate(item, state)
+        self.tree_widget.blockSignals(False)
 
+
+    def _set_children_checkstate(self, item, state):
+        for i in range(item.childCount()):
+            child = item.child(i)
+            child.setCheckState(0, state)
+            self._set_children_checkstate(child, state)
     # ===========================================================================
     def _get_header_text(self, file_path, rows=5):
         """
@@ -930,7 +954,26 @@ class MainWindow(QMainWindow):
             "vat_input": vat_input,
             "vat_payable": vat_output - vat_input
         }
-        
+    def _extract_period_dates(self, text):
+        """
+        Извлекает дату начала и окончания периода из текста книги покупок/продаж.
+        Возвращает (date_start, date_end) в формате YYYY-MM-DD
+        """
+        import re
+        from datetime import datetime
+
+        # Ищем две даты вида 01.04.2025
+        dates = re.findall(r'\d{2}\.\d{2}\.\d{4}', text)
+
+        if len(dates) >= 2:
+            date_start = datetime.strptime(dates[0], "%d.%m.%Y").strftime("%Y-%m-%d")
+            date_end = datetime.strptime(dates[1], "%d.%m.%Y").strftime("%Y-%m-%d")
+            return date_start, date_end
+
+        # Если не нашли — возвращаем None
+        return None, None
+    
+    # ----------------------------------------------------------------------------------   
     # Импорт эксель файлов
     def _import_excel_file(self, file_path):
         if file_path.lower().endswith('.xls'):
@@ -2313,7 +2356,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v4.0.0</p>
+        <p><b>Версия программы:</b> v4.2.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
