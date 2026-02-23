@@ -33,9 +33,7 @@ class DatabaseManager:
     def __init__(self, db_path='buh_tuund.db'):
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.create_tables()
-        self.settings = QSettings("Компания", "BuhTuund")
-        self._load_saved_root()
-
+        
     def create_tables(self):
         cursor = self.conn.cursor()
 
@@ -166,9 +164,11 @@ class MainWindow(QMainWindow):
         self.db = DatabaseManager()
         self.current_df = None
         self.init_ui()
+        self.settings = QSettings("Компания", "BuhTuund")
+        self._load_saved_paths()
     
     def init_ui(self):
-        self.setWindowTitle("BuhTuundOtchet v3.0.1")
+        self.setWindowTitle("BuhTuundOtchet")
         self.setGeometry(100, 100, 1400, 800)
         self.setStyleSheet("""
             QMainWindow {
@@ -478,16 +478,26 @@ class MainWindow(QMainWindow):
             return 0.0
 
     # ==================================================================================
-    # Сохранение и загрузка настоек
+    # Сохранение и загрузка настроек
     def choose_root_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Выберите корневую папку")
+        folder = QFileDialog.getExistingDirectory(self, "Выберите папку загрузки")
         if folder:
-            self.settings.setValue("root_folder", folder)
+            self.settings.setValue("input_folder", folder)
             self.load_folder_tree(folder)
-    def _load_saved_root(self):
-        folder = self.settings.value("root_folder", "")
-        if folder and os.path.exists(folder):
-            self.load_folder_tree(folder)
+    def _load_saved_paths(self):
+        input_path = self.settings.value("input_folder", "")
+        output_path = self.settings.value("output_folder", "")
+
+        if input_path and os.path.exists(input_path):
+            self.load_folder_tree(input_path)
+
+        if output_path and os.path.exists(output_path):
+            self.output_folder = output_path
+    def choose_output_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Выберите папку выгрузки")
+        if folder:
+            self.settings.setValue("output_folder", folder)
+            self.output_folder = folder
     # ==================================================================================
     # Методы для работы с деревом
     def load_folder_tree(self, folder_path):
@@ -511,7 +521,7 @@ class MainWindow(QMainWindow):
                     child.setCheckState(0, Qt.CheckState.Unchecked)
                     parent_item.addChild(child)
                     self._add_folder_contents(full_path, child)
-                elif item.lower().endswith(('.xls', '.xlsx')):
+                elif item.lower().endswith('.xlsx'):
                     child = QTreeWidgetItem([item])
                     child.setData(0, Qt.ItemDataRole.UserRole, full_path)
                     child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -543,7 +553,7 @@ class MainWindow(QMainWindow):
             folder = item.data(0, Qt.ItemDataRole.UserRole)
             for root, dirs, files_in_folder in os.walk(folder):
                 for f in files_in_folder:
-                    if f.lower().endswith(('.xls', '.xlsx')):
+                    if f.lower().endswith('.xlsx'):
                         files.append(os.path.join(root, f))
             # Дочерние элементы не нужно обходить отдельно, так как мы уже прошли всю папку.
             # Но чтобы избежать дублирования, пропускаем детей.
@@ -746,7 +756,7 @@ class MainWindow(QMainWindow):
 
     def load_files(self):
         file_paths, _ = QFileDialog.getOpenFileNames(
-            self, "Выберите файлы Excel", "", "Excel Files (*.xlsx *.xls)"
+            self, "Выберите файлы Excel", "", "Excel Files (*.xlsx)"
         )
         if file_paths:
             self.process_files(file_paths)
@@ -761,7 +771,7 @@ class MainWindow(QMainWindow):
         excel_files = []
         for root, dirs, files in os.walk(folder_path):
             for file in files:
-                if file.lower().endswith(('.xlsx', '.xls')):
+                if file.lower().endswith('.xlsx'):
                     excel_files.append(os.path.join(root, file))
 
         if not excel_files:
@@ -976,7 +986,7 @@ class MainWindow(QMainWindow):
     # ----------------------------------------------------------------------------------   
     # Импорт эксель файлов
     def _import_excel_file(self, file_path):
-        if file_path.lower().endswith('.xls'):
+        if file_path.lower().endswith('.xlsx'):
             try:
                 import xlrd
             except ImportError:
@@ -1036,7 +1046,11 @@ class MainWindow(QMainWindow):
 
         df = pd.read_excel(file_path, header=None, dtype=str)
         df = df.fillna("")
-
+        if df.empty:
+            raise ValueError("Файл пустой или данные не распознаны")
+        print(file_path)
+        print(df.head())
+        print(df.shape)
         header_text = self._flatten_text(df, slice(0, 15))
 
         company = self._extract_company_from_text(header_text)
@@ -1047,13 +1061,17 @@ class MainWindow(QMainWindow):
 
         # Поиск строки с нумерацией колонок
         header_row = None
+
         for i in range(len(df)):
-            if str(df.iloc[i, 0]).strip() == "1":
+            row_values = df.iloc[i].astype(str).str.strip().tolist()
+
+            if row_values[:5] == ['1', '2', '3', '4', '5']:
                 header_row = i
                 break
 
         if header_row is None:
-            raise ValueError("Не найдена строка с нумерацией колонок")
+            print("Не найдена строка с номерами колонок")
+            return 0
 
         # Названия колонок — строка выше
         titles_row = header_row - 1
@@ -1121,23 +1139,26 @@ class MainWindow(QMainWindow):
         header_text = self._flatten_text(df, slice(0, 5))
         company = self._extract_company_from_text(header_text)
         period = self._extract_period_from_text(header_text, file_path)
-
+        if df.empty:
+            raise ValueError("Файл пустой или данные не распознаны")
+        print(file_path)
+        print(df.head())
+        print(df.shape)
         print(f"\n--- Книга покупок: {os.path.basename(file_path)} ---")
         for i in range(min(20, len(df))):
             print(f"Строка {i}: {df.iloc[i].tolist()}")
 
         # Находим строку с номерами колонок (1, 2, 3...)
-        header_row = None
         for i in range(len(df)):
-            row = df.iloc[i]
-            if len(row) > 1:
-                first = str(row[0]).strip()
-                second = str(row[1]).strip()
-                if first == '1' and second == '2':
-                    header_row = i
-                    break
+            row_values = df.iloc[i].astype(str).str.strip().tolist()
+
+            if row_values[:5] == ['1', '2', '3', '4', '5']:
+                header_row = i
+                break
+
         if header_row is None:
-            raise ValueError("Не удалось найти строку с номерами колонок в книге покупок")
+            print("Не найдена строка с номерами колонок")
+            return 0
 
         # Данные начинаются со следующей строки
         start_row = header_row + 1
@@ -1224,7 +1245,11 @@ class MainWindow(QMainWindow):
         header_text = self._flatten_text(df, slice(0, 5))
         company = self._extract_company_from_text(header_text)
         period = self._extract_period_from_text(header_text, file_path)
-
+        if df.empty:
+            raise ValueError("Файл пустой или данные не распознаны")
+        print(file_path)
+        print(df.head())
+        print(df.shape)
         print(f"\n--- Книга продаж: {os.path.basename(file_path)} ---")
         for i in range(min(20, len(df))):
             print(f"Строка {i}: {df.iloc[i].tolist()}")
@@ -1331,7 +1356,11 @@ class MainWindow(QMainWindow):
 
         df = pd.read_excel(file_path, dtype=str)
         df = df.fillna("")
-
+        if df.empty:
+            raise ValueError("Файл пустой или данные не распознаны")
+        print(file_path)
+        print(df.head())
+        print(df.shape)
         header_text = self._flatten_text(df, slice(0, 20))
 
         company = self._extract_company_from_text(header_text)
@@ -1433,24 +1462,26 @@ class MainWindow(QMainWindow):
         header_text = self._flatten_text(df, slice(0, 5))
         company = self._extract_company_from_text(header_text)
         period = self._extract_period_from_text(header_text, file_path)
-
+        if df.empty:
+            raise ValueError("Файл пустой или данные не распознаны")
+        print(file_path)
+        print(df.head())
+        print(df.shape)
         print(f"\n--- ОСВ 44: {os.path.basename(file_path)} ---")
         for i in range(min(20, len(df))):
             print(f"Строка {i}: {df.iloc[i].tolist()}")
 
         # Поиск строки с 'Счет' и следующей строки с 'Статьи затрат'
-        header_row = None
-        for i in range(len(df)-1):
-            row = df.iloc[i]
-            row_str = ' '.join([str(c).lower() for c in row if pd.notna(c)])
-            if 'счет' in row_str:
-                next_row = df.iloc[i+1]
-                next_str = ' '.join([str(c).lower() for c in next_row if pd.notna(c)])
-                if 'статьи затрат' in next_str:
-                    header_row = i
-                    break
+        for i in range(len(df)):
+            row_values = df.iloc[i].astype(str).str.strip().tolist()
+
+            if row_values[:5] == ['1', '2', '3', '4', '5']:
+                header_row = i
+                break
+
         if header_row is None:
-            raise ValueError("Не удалось найти заголовки в ОСВ 44")
+            print("Не найдена строка с номерами колонок")
+            return 0
 
         # Данные начинаются через 3 строки после header_row (после двух строк заголовков и строки 'Период')
         start_row = header_row + 3
@@ -1533,7 +1564,11 @@ class MainWindow(QMainWindow):
         import re
 
         df = pd.read_excel(file_path, header=None, dtype=str).fillna("")
-
+        if df.empty:
+            raise ValueError("Файл пустой или данные не распознаны")
+        print(file_path)
+        print(df.head())
+        print(df.shape)
         header_text = self._flatten_text(df, slice(0, 15))
 
         company = self._extract_company_from_text(header_text)
@@ -1597,7 +1632,11 @@ class MainWindow(QMainWindow):
         company = self._extract_company_from_text(header_text)
         period_base = self._extract_period_from_text(header_text, file_path)
         year = period_base.split('.')[1] if '.' in period_base else period_base
-
+        if df.empty:
+            raise ValueError("Файл пустой или данные не распознаны")
+        print(file_path)
+        print(df.head())
+        print(df.shape)
         print(f"\n--- Отчёт по продажам: {os.path.basename(file_path)} ---")
         for i in range(min(15, len(df))):
             print(f"Строка {i}: {df.iloc[i].tolist()}")
@@ -1783,7 +1822,7 @@ class MainWindow(QMainWindow):
         """
         if file_path is None:
             file_path, _ = QFileDialog.getOpenFileName(
-                self, "Выберите файл Excel", "", "Excel Files (*.xlsx *.xls)"
+                self, "Выберите файл Excel", "", "Excel Files (*x *.xlsx)"
             )
             if not file_path:
                 return
@@ -2356,7 +2395,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v4.2.0</p>
+        <p><b>Версия программы:</b> v4.3.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
