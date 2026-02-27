@@ -1354,56 +1354,88 @@ class MainWindow(QMainWindow):
         import pandas as pd
         import re
 
-        df = pd.read_excel(file_path, dtype=str)
+        df = pd.read_excel(file_path, dtype=str, header=None)
         df = df.fillna("")
+        print(df.columns)
+        print(df.iloc[15:25])
+
+
         if df.empty:
             raise ValueError("Файл пустой или данные не распознаны")
-        print(file_path)
-        print(df.head())
-        print(df.shape)
-        header_text = self._flatten_text(df, slice(0, 20))
 
+        header_text = self._flatten_text(df, slice(0, 20))
         company = self._extract_company_from_text(header_text)
 
-        year_match = re.search(r'за\s+(\d{4})', header_text)
-        year = int(year_match.group(1)) if year_match else None
+        # -------- ИЗВЛЕЧЕНИЕ ПЕРИОДА --------
+        header_lower = header_text.lower()
 
-        period_start = f"{year}-01-01"
-        period_end = f"{year}-12-31"
+        range_match = re.search(
+            r'за\s+([а-я]+)\s+(\d{4}).*?-\s*([а-я]+)\s+(\d{4})',
+            header_lower
+        )
+        year_match = re.search(r'за\s+(\d{4})', header_lower)
 
-        records = []
+        month_map = {
+            "январь": "01", "февраль": "02", "март": "03",
+            "апрель": "04", "май": "05", "июнь": "06",
+            "июль": "07", "август": "08", "сентябрь": "09",
+            "октябрь": "10", "ноябрь": "11", "декабрь": "12"
+        }
 
-        # Ищем строку "Контрагенты"
+        if range_match:
+            start_month = month_map.get(range_match.group(1))
+            start_year = range_match.group(2)
+            end_month = month_map.get(range_match.group(3))
+            end_year = range_match.group(4)
+
+            if not start_month or not end_month:
+                raise ValueError("Не удалось распознать месяцы периода")
+
+            period = f"{start_month}.{start_year}-{end_month}.{end_year}"
+
+        elif year_match:
+            year = year_match.group(1)
+            period = f"01.{year}-12.{year}"
+
+        else:
+            raise ValueError("Не удалось определить период из шапки документа")
+
+        # -------- НАХОДИМ НАЧАЛО КОНТРАГЕНТОВ --------
         start_row = None
         for i in range(len(df)):
-            if "контрагенты" in str(df.iloc[i, 0]).lower():
+            if str(df.iloc[i, 0]).strip().lower() == "период":
                 start_row = i + 1
                 break
 
         if start_row is None:
-            raise ValueError("Не найдена таблица ОСВ")
+            raise ValueError("Не найдена строка 'Период'")
+
+        records = []
 
         for idx in range(start_row, len(df)):
-
             row = df.iloc[idx]
             name = str(row[0]).strip()
 
             if not name:
                 continue
 
+            # пропускаем счета 19, 19.03 и подобные
+            if re.match(r'^\d+(\.\d+)?$', name):
+                continue
+
+            # пропускаем строки оборотов
             if "оборот" in name.lower():
                 continue
 
-            debit = self._clean_number(row[3])  # оборот Дт
-            credit = self._clean_number(row[4]) # оборот Кт
+            debit = self._clean_number(row[3])
+            credit = self._clean_number(row[4])
 
-            if debit == 0:
+            if debit == 0 and credit == 0:
                 continue
 
             record = {
                 "company": company,
-                "period_start": period_start,
-                "period_end": period_end,
+                "period": period,
                 "doc_type": "osv_19",
                 "product_group": "ОСВ 19",
                 "nomenclature": name,
@@ -1420,6 +1452,9 @@ class MainWindow(QMainWindow):
             }
 
             records.append(record)
+
+        if not records:
+            raise ValueError("Контрагенты не найдены")
 
         df_to_save = pd.DataFrame(records)
         return self.db.save_data(df_to_save)
@@ -2395,7 +2430,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v4.3.0</p>
+        <p><b>Версия программы:</b> v5.0.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
