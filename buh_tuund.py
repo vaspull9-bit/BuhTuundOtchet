@@ -1357,7 +1357,7 @@ class MainWindow(QMainWindow):
         df = pd.read_excel(file_path, dtype=str, header=None)
         df = df.fillna("")
         print(df.columns)
-        print(df.iloc[15:25])
+        print(df.iloc[12:25])
 
 
         if df.empty:
@@ -2430,7 +2430,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v5.0.0</p>
+        <p><b>Версия программы:</b> v5.1.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
