@@ -1351,108 +1351,103 @@ class MainWindow(QMainWindow):
 
     # ========== ОСВ 19 (по контрагентам) ==========
     def _parse_osv_19_detailed(self, file_path):
+
         import pandas as pd
         import re
 
-        df = pd.read_excel(file_path, dtype=str, header=None)
-        df = df.fillna("")
-        print(df.columns)
+        df = pd.read_excel(file_path, header=None)
+
         pd.set_option('display.max_rows', None)
         print(df.iloc[12:189])
 
-        if df.empty:
-            raise ValueError("Файл пустой")
+        records = []
+        current_account = None
+        period = None
 
-        header_text = self._flatten_text(df, slice(0, 10))
-        company = self._extract_company_from_text(header_text)
-
-        # -------- ПЕРИОД --------
-        header_lower = header_text.lower()
-
-        range_match = re.search(
-            r'за\s+([а-я]+)\s+(\d{4}).*?-\s*([а-я]+)\s+(\d{4})',
-            header_lower
-        )
-        year_match = re.search(r'за\s+(\d{4})', header_lower)
-
-        month_map = {
-            "январь": "01", "февраль": "02", "март": "03",
-            "апрель": "04", "май": "05", "июнь": "06",
-            "июль": "07", "август": "08", "сентябрь": "09",
-            "октябрь": "10", "ноябрь": "11", "декабрь": "12"
-        }
-
-        if range_match:
-            period = (
-                f"{month_map[range_match.group(1)]}.{range_match.group(2)}-"
-                f"{month_map[range_match.group(3)]}.{range_match.group(4)}"
-            )
-        elif year_match:
-            year = year_match.group(1)
-            period = f"01.{year}-12.{year}"
-        else:
-            raise ValueError("Не найден период")
-
-        # -------- НАЙТИ СТРОКУ 'Период' --------
-        start_row = None
+        # --- 1. Поиск периода ---
         for i in range(len(df)):
-            if str(df.iloc[i, 0]).strip().lower() == "период":
-                start_row = i + 1
+            cell = str(df.iloc[i, 0])
+            if "Период" in cell:
+                period = cell.strip()
                 break
 
-        if start_row is None:
-            raise ValueError("Не найдена строка 'Период'")
+        if not period:
+            raise Exception("В файле ОСВ не найден период")
 
-        records = []
-
-        for idx in range(start_row, len(df)):
+        # --- 2. Основной цикл ---
+        for idx in range(len(df)):
 
             name = str(df.iloc[idx, 0]).strip()
 
-            if not name:
+            if not name or name == "nan":
                 continue
 
-            # стоп по итогу
-            if name.lower().startswith("итого"):
+            name_lower = name.lower()
+
+            # --- 2.1 Определяем счет 19 / 19.03 / 19.04 ---
+            if re.fullmatch(r'\d+(\.\d+)?', name):
+                current_account = name
+                continue
+
+            # --- 2.2 Остановка на итогах ---
+            if name_lower.startswith("итого"):
                 break
 
-            # пропустить счета
-            if re.match(r'^\d+(\.\d+)?$', name):
+            # --- 2.3 Пропускаем строки "Обороты за ..." ---
+            if name_lower.startswith("обороты за"):
                 continue
 
-            # пропустить обороты
-            if name.lower().startswith("обороты за"):
-                continue
+            # --- 2.4 Обработка контрагента ---
+            if current_account:
 
-            debit = self._clean_number(df.iloc[idx, 3])
-            credit = self._clean_number(df.iloc[idx, 4])
+                debit_raw = df.iloc[idx, 3]
+                credit_raw = df.iloc[idx, 4]
 
-            if debit == 0 and credit == 0:
-                continue
+                debit = self._clean_number(debit_raw)
+                credit = self._clean_number(credit_raw)
 
-            records.append({
-                "company": company,
-                "period": period,
-                "doc_type": "osv_19",
-                "product_group": "ОСВ 19",
-                "nomenclature": name,
-                "revenue": 0,
-                "vat_in_revenue": 0,
-                "cost_price": 0,
-                "vat_deductible": debit,
-                "vat_to_budget": 0,
-                "quantity": 1,
-                "gross_profit": 0,
-                "sales_expenses": 0,
-                "other_income_expenses": 0,
-                "net_profit": 0
-            })
+                # если нет оборотов — пропускаем
+                if debit == 0 and credit == 0:
+                    continue
 
+                record = {
+                    "account": current_account,
+                    "counterparty": name,
+                    "debit_turnover": debit,
+                    "credit_turnover": credit,
+                    "period": period
+                }
+
+                records.append(record)
+
+        # --- 3. Результат ---
         if not records:
-            raise ValueError("Контрагенты не найдены")
-        print("Найдено записей:", len(records))
-        df_to_save = pd.DataFrame(records)
-        return self.db.save_data(df_to_save)
+            print("⚠ ОСВ 19: записи не найдены")
+            return pd.DataFrame()
+
+        result_df = pd.DataFrame(records)
+
+        print(f"ОСВ 19: найдено записей — {len(result_df)}")
+
+        return result_df
+    
+    def _clean_number(self, value):
+
+        import pandas as pd
+
+        if pd.isna(value):
+            return 0
+
+        s = str(value)
+        s = s.replace(" ", "")
+        s = s.replace("\xa0", "")
+        s = s.replace(",", ".")
+        s = s.strip()
+
+        try:
+            return float(s)
+        except:
+            return 0
 
     # ========== ОСВ 41 (по номенклатуре) ==========
     def _parse_osv_41_detailed(self, df, company, period):
@@ -2430,7 +2425,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v5.2.0</p>
+        <p><b>Версия программы:</b> v5.4.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
