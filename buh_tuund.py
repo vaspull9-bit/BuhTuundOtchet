@@ -1357,16 +1357,16 @@ class MainWindow(QMainWindow):
         df = pd.read_excel(file_path, dtype=str, header=None)
         df = df.fillna("")
         print(df.columns)
-        print(df.iloc[12:25])
-
+        pd.set_option('display.max_rows', None)
+        print(df.iloc[12:189])
 
         if df.empty:
-            raise ValueError("Файл пустой или данные не распознаны")
+            raise ValueError("Файл пустой")
 
-        header_text = self._flatten_text(df, slice(0, 20))
+        header_text = self._flatten_text(df, slice(0, 10))
         company = self._extract_company_from_text(header_text)
 
-        # -------- ИЗВЛЕЧЕНИЕ ПЕРИОДА --------
+        # -------- ПЕРИОД --------
         header_lower = header_text.lower()
 
         range_match = re.search(
@@ -1383,24 +1383,17 @@ class MainWindow(QMainWindow):
         }
 
         if range_match:
-            start_month = month_map.get(range_match.group(1))
-            start_year = range_match.group(2)
-            end_month = month_map.get(range_match.group(3))
-            end_year = range_match.group(4)
-
-            if not start_month or not end_month:
-                raise ValueError("Не удалось распознать месяцы периода")
-
-            period = f"{start_month}.{start_year}-{end_month}.{end_year}"
-
+            period = (
+                f"{month_map[range_match.group(1)]}.{range_match.group(2)}-"
+                f"{month_map[range_match.group(3)]}.{range_match.group(4)}"
+            )
         elif year_match:
             year = year_match.group(1)
             period = f"01.{year}-12.{year}"
-
         else:
-            raise ValueError("Не удалось определить период из шапки документа")
+            raise ValueError("Не найден период")
 
-        # -------- НАХОДИМ НАЧАЛО КОНТРАГЕНТОВ --------
+        # -------- НАЙТИ СТРОКУ 'Период' --------
         start_row = None
         for i in range(len(df)):
             if str(df.iloc[i, 0]).strip().lower() == "период":
@@ -1413,27 +1406,31 @@ class MainWindow(QMainWindow):
         records = []
 
         for idx in range(start_row, len(df)):
-            row = df.iloc[idx]
-            name = str(row[0]).strip()
+
+            name = str(df.iloc[idx, 0]).strip()
 
             if not name:
                 continue
 
-            # пропускаем счета 19, 19.03 и подобные
+            # стоп по итогу
+            if name.lower().startswith("итого"):
+                break
+
+            # пропустить счета
             if re.match(r'^\d+(\.\d+)?$', name):
                 continue
 
-            # пропускаем строки оборотов
-            if "оборот" in name.lower():
+            # пропустить обороты
+            if name.lower().startswith("обороты за"):
                 continue
 
-            debit = self._clean_number(row[3])
-            credit = self._clean_number(row[4])
+            debit = self._clean_number(df.iloc[idx, 3])
+            credit = self._clean_number(df.iloc[idx, 4])
 
             if debit == 0 and credit == 0:
                 continue
 
-            record = {
+            records.append({
                 "company": company,
                 "period": period,
                 "doc_type": "osv_19",
@@ -1449,13 +1446,11 @@ class MainWindow(QMainWindow):
                 "sales_expenses": 0,
                 "other_income_expenses": 0,
                 "net_profit": 0
-            }
-
-            records.append(record)
+            })
 
         if not records:
             raise ValueError("Контрагенты не найдены")
-
+        print("Найдено записей:", len(records))
         df_to_save = pd.DataFrame(records)
         return self.db.save_data(df_to_save)
 
@@ -2068,9 +2063,14 @@ class MainWindow(QMainWindow):
 
                 period_revenue = period_revenue.sort_values('period_dt')
 
-                if not period_revenue.empty and period_revenue.sum() != 0:
-                    self.axes[1, 0].plot(period_revenue.index, period_revenue.values,
-                                        marker='o', linewidth=2, color='#9b59b6')
+                if not period_revenue.empty and period_revenue['revenue'].sum() != 0:
+                    self.axes[1, 0].plot(
+                        period_revenue['period_dt'],
+                        period_revenue['revenue'],
+                        marker='o',
+                        linewidth=2,
+                        color='#9b59b6'
+                    )
                     self.axes[1, 0].set_title('Динамика выручки по периодам')
                     self.axes[1, 0].set_ylabel('Выручка, ₽')
                     self.axes[1, 0].grid(True, alpha=0.3)
@@ -2430,7 +2430,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v5.1.0</p>
+        <p><b>Версия программы:</b> v5.2.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
