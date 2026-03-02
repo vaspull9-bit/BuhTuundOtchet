@@ -986,120 +986,388 @@ class MainWindow(QMainWindow):
     # ----------------------------------------------------------------------------------   
     # Импорт эксель файлов
     def _import_excel_file(self, file_path):
+
         if file_path.lower().endswith('.xlsx'):
             try:
                 import xlrd
             except ImportError:
                 raise ImportError("Для чтения файлов .xls установите xlrd: pip install xlrd")
 
-        # Читаем первые 10 строк
         try:
             df_preview = pd.read_excel(file_path, nrows=10, header=None, dtype=str)
         except:
             df_preview = pd.read_excel(file_path, nrows=10, header=None)
             df_preview = df_preview.astype(str)
+
         df_preview = df_preview.fillna('')
         preview_text = ' '.join(df_preview.values.flatten()).lower()
 
-        # Определение типа
+        # ----------- КНИГИ -----------
         if 'книга покупок' in preview_text:
-            #return self._parse_purchase_ledger_detailed(file_path)
-            return self._parse_ledger_detailed(file_path, ledger_type="purchase")
+            return self._parse_purchase_book(file_path)
+
         elif 'книга продаж' in preview_text:
-            #return self._parse_sales_ledger_detailed(file_path)
-            return self._parse_ledger_detailed(file_path, ledger_type="sales")
-        elif 'оборотно-сальдовая ведомость по счету 19' in preview_text or 'анализ счета 19' in preview_text or 'счет 19' in preview_text:
+            return self._parse_sales_book(file_path)
+
+        # ----------- ОСВ -----------
+        elif 'оборотно-сальдовая ведомость по счету 19' in preview_text or 'анализ счета 19' in preview_text:
             return self._parse_osv_19_detailed(file_path)
-        elif 'оборотно-сальдовая ведомость по счету 41' in preview_text or 'счет 41' in preview_text:
+
+        elif 'оборотно-сальдовая ведомость по счету 41' in preview_text:
             return self._parse_osv_41_detailed(file_path)
-        elif 'оборотно-сальдовая ведомость по счету 44' in preview_text or 'счет 44' in preview_text:
+
+        elif 'оборотно-сальдовая ведомость по счету 44' in preview_text:
             return self._parse_osv_44_detailed(file_path)
-        elif 'оборотно-сальдовая ведомость по счету 90' in preview_text or 'счет 90' in preview_text:
+
+        elif 'оборотно-сальдовая ведомость по счету 60' in preview_text:
+            return self._parse_osv_60_detailed(file_path)
+
+        elif 'оборотно-сальдовая ведомость по счету 62' in preview_text:
+            return self._parse_osv_62_detailed(file_path)
+
+        elif 'оборотно-сальдовая ведомость по счету 68' in preview_text:
+            return self._parse_osv_68_detailed(file_path)
+
+        elif 'оборотно-сальдовая ведомость по счету 90' in preview_text:
             return self._parse_osv_90_detailed(file_path)
-        elif 'оборотно-сальдовая ведомость по счету 91' in preview_text or 'счет 91' in preview_text:
+
+        elif 'оборотно-сальдовая ведомость по счету 91' in preview_text:
             return self._parse_osv_91_detailed(file_path)
-        elif 'отчет по продажам за' in preview_text or 'отчет по продажам' in preview_text:
+
+        elif 'отчет по продажам' in preview_text:
             return self._parse_sales_report_detailed(file_path)
+
         else:
             return self._import_legacy(file_path)
-
+    
+    #----------------------------------------------------------------------------------------
     # Расчет НДС за период
     # НДС к уплате = Σ НДС начисленный (продажи) – Σ НДС к вычету (покупки)
     def calculate_vat_for_period(self, company, period):
+
         df = self.db.get_data(company=company, period=period)
 
-        vat_out = df["vat_to_budget"].sum()
-        vat_in = df["vat_deductible"].sum()
+        purchase_vat = df[
+            df["doc_type"] == "purchase_book"
+        ]["vat_amount"].sum()
+
+        sales_vat = df[
+            df["doc_type"] == "sales_book"
+        ]["vat_amount"].sum()
 
         return {
-            "vat_output": vat_out,
-            "vat_input": vat_in,
-            "vat_payable": vat_out - vat_in
+            "vat_output": sales_vat,
+            "vat_input": purchase_vat,
+            "vat_payable": sales_vat - purchase_vat
         }
 
-    # ========== УНИВЕРСАЛЬНАЯ КНИГА ПОКУПОК И ПРОДАЖ  ==========        
+    # ========== Отдельный парсер ОСВ 68  ==========    
+    def _parse_osv_68_detailed(self, file_path):
 
-    def _parse_ledger_detailed(self, file_path, ledger_type):
         import pandas as pd
         import re
-        from datetime import datetime
+
+        df = pd.read_excel(file_path, header=None)
+
+        records = []
+        company = None
+        period_start = None
+        period_end = None
+
+        # компания
+        for i in range(10):
+            cell = str(df.iloc[i, 0])
+            if "ООО" in cell:
+                company = cell.strip()
+                break
+
+        # период
+        for i in range(20):
+            cell = str(df.iloc[i, 0])
+            match_year = re.search(r'за\s+(\d{4})\s*г', cell)
+            if match_year:
+                year = int(match_year.group(1))
+                period_start = f"{year}-01-01"
+                period_end = f"{year}-12-31"
+                break
+
+        # ищем строку "68"
+        for idx in range(len(df)):
+            name = str(df.iloc[idx, 0]).strip()
+
+            if name == "68":
+
+                debit = self._clean_number(df.iloc[idx, 3])
+                credit = self._clean_number(df.iloc[idx, 4])
+
+                records.append({
+                    "company": company,
+                    "account": "68",
+                    "counterparty": "Налоги",
+                    "debit_turnover": float(debit),
+                    "credit_turnover": float(credit),
+                    "period_start": period_start,
+                    "period_end": period_end,
+                    "doc_type": "osv_68"
+                })
+                break
+
+        return pd.DataFrame(records)
+
+    # ========== Идеальный универсальный парсер ОСВ (19/41/44/60/62/90/91)  ==========    
+     
+    def _parse_osv_generic(self, file_path, account_number):
+
+        import pandas as pd
+        import re
+        from datetime import datetime, date
+
+        df = pd.read_excel(file_path, header=None)
+        df = df.fillna("")
+
+        records = []
+
+        company = None
+        period_start = None
+        period_end = None
+        current_account = None
+
+        # =========================================
+        # 1. Определяем компанию
+        # =========================================
+        for i in range(min(15, len(df))):
+            cell = str(df.iloc[i, 0]).strip()
+            if "ООО" in cell.upper():
+                company = cell
+                break
+
+        if not company:
+            company = "Неизвестная компания"
+
+        # =========================================
+        # 2. Определяем период
+        # =========================================
+        header_text = " ".join(
+            df.iloc[:20].astype(str).values.flatten()
+        ).lower()
+
+        # 2.1 Период вида: с 01.01.2025 по 31.03.2025
+        match_period = re.search(
+            r'с\s*(\d{2}\.\d{2}\.\d{4})\s*по\s*(\d{2}\.\d{2}\.\d{4})',
+            header_text
+        )
+
+        if match_period:
+            period_start = datetime.strptime(
+                match_period.group(1),
+                "%d.%m.%Y"
+            ).strftime("%Y-%m-%d")
+
+            period_end = datetime.strptime(
+                match_period.group(2),
+                "%d.%m.%Y"
+            ).strftime("%Y-%m-%d")
+
+        else:
+            # 2.2 Годовая форма: за 2025 г., за 2025 год
+            match_year = re.search(
+                r'за\s*(\d{4})\s*(г\.?|год)?',
+                header_text
+            )
+
+            if match_year:
+                year = int(match_year.group(1))
+                period_start = f"{year}-01-01"
+                period_end = f"{year}-12-31"
+            else:
+                raise Exception("Не найден период в ОСВ")
+
+        # =========================================
+        # 3. Определяем колонки дебет/кредит
+        # =========================================
+        debit_col = None
+        credit_col = None
+
+        for i in range(len(df)):
+            row = [str(x).lower() for x in df.iloc[i]]
+
+            if "оборот" in " ".join(row) and "дебет" in " ".join(row):
+                for j, val in enumerate(row):
+                    if "дебет" in val:
+                        debit_col = j
+                    if "кредит" in val:
+                        credit_col = j
+                break
+
+        # fallback (стандартная структура 1С)
+        if debit_col is None:
+            debit_col = 3
+        if credit_col is None:
+            credit_col = 4
+
+        # =========================================
+        # 4. Основной цикл по строкам
+        # =========================================
+        for idx in range(len(df)):
+
+            name = str(df.iloc[idx, 0]).strip()
+
+            if not name or name.lower() == "nan":
+                continue
+
+            name_lower = name.lower()
+
+            # если строка — это номер счета
+            if re.fullmatch(r'\d+(\.\d+)?', name):
+                current_account = name
+                continue
+
+            # стоп на "Итого"
+            if name_lower.startswith("итого"):
+                break
+
+            if not current_account:
+                continue
+
+            debit_raw = df.iloc[idx, debit_col]
+            credit_raw = df.iloc[idx, credit_col]
+
+            debit = self._clean_number(debit_raw)
+            credit = self._clean_number(credit_raw)
+
+            if debit == 0 and credit == 0:
+                continue
+
+            records.append({
+                "company": company,
+                "account": current_account,
+                "counterparty": name,
+                "debit_turnover": float(debit),
+                "credit_turnover": float(credit),
+                "period_start": period_start,
+                "period_end": period_end,
+                "doc_type": f"osv_{account_number}"
+            })
+
+        result_df = pd.DataFrame(records)
+
+        print(f"ОСВ {account_number}: найдено записей — {len(result_df)}")
+
+        return result_df
+    
+    # =========================================================
+    # Обертки для универсального парсера ОСВ
+
+    def _parse_osv_19_detailed(self, file_path):
+        return self._parse_osv_generic(file_path, 19)
+
+    def _parse_osv_41_detailed(self, file_path):
+        return self._parse_osv_generic(file_path, 41)
+
+    def _parse_osv_44_detailed(self, file_path):
+        return self._parse_osv_generic(file_path, 44)
+
+    def _parse_osv_60_detailed(self, file_path):
+        return self._parse_osv_generic(file_path, 60)
+
+    def _parse_osv_62_detailed(self, file_path):
+        return self._parse_osv_generic(file_path, 62)
+
+    def _parse_osv_90_detailed(self, file_path):
+        return self._parse_osv_generic(file_path, 90)
+
+    def _parse_osv_91_detailed(self, file_path):
+        return self._parse_osv_generic(file_path, 91)
+      
+    # ========== УНИВЕРСАЛЬНАЯ КНИГА ПОКУПОК / ПРОДАЖ ==========
+
+    def _parse_ledger_universal(self, file_path, ledger_type):
+
+        import pandas as pd
+        import re
 
         df = pd.read_excel(file_path, header=None, dtype=str)
-        df = df.fillna("")
+        df = df.fillna("").applymap(lambda x: str(x).strip())
+
         if df.empty:
-            raise ValueError("Файл пустой или данные не распознаны")
-        print(file_path)
-        print(df.head())
-        print(df.shape)
-        header_text = self._flatten_text(df, slice(0, 15))
+            raise ValueError("Файл пустой")
 
-        company = self._extract_company_from_text(header_text)
-        date_start, date_end = self._extract_period_dates(header_text)
+        header_text = " ".join(
+            df.iloc[:20].astype(str).values.flatten()
+        )
 
-        print(f"Компания: {company}")
-        print(f"Период: {date_start} — {date_end}")
+        company_match = re.search(r'ООО\s+"?[^"]+"?', header_text)
+        company = company_match.group(0) if company_match else "Не определено"
 
-        # Поиск строки с нумерацией колонок
+        period_match = re.search(
+            r'с\s+(\d{2}\.\d{2}\.\d{4})\s+по\s+(\d{2}\.\d{2}\.\d{4})',
+            header_text
+        )
+
+        if not period_match:
+            raise Exception("Не найден период в книге")
+
+        period_start = pd.to_datetime(
+            period_match.group(1),
+            dayfirst=True
+        ).strftime("%Y-%m-%d")
+
+        period_end = pd.to_datetime(
+            period_match.group(2),
+            dayfirst=True
+        ).strftime("%Y-%m-%d")
+
         header_row = None
 
         for i in range(len(df)):
-            row_values = df.iloc[i].astype(str).str.strip().tolist()
-
-            if row_values[:5] == ['1', '2', '3', '4', '5']:
+            row = df.iloc[i].tolist()
+            numbers = [x for x in row if x.isdigit()]
+            if len(numbers) >= 10:
                 header_row = i
                 break
 
         if header_row is None:
-            print("Не найдена строка с номерами колонок")
-            return 0
+            raise Exception("Не найдена строка с нумерацией колонок")
 
-        # Названия колонок — строка выше
         titles_row = header_row - 1
-        headers = df.iloc[titles_row].astype(str).str.lower()
+        headers = df.iloc[titles_row].str.lower()
 
-        # Динамическое определение индексов
-        col_counterparty = headers[headers.str.contains("контрагент")].index[0]
-        col_amount = headers[headers.str.contains("стоимость")].index[0]
-        col_vat = headers[headers.str.contains("ндс")].index[0]
+        col_counterparty = None
+        col_amount = None
+        col_vat = None
 
-        start_row = header_row + 1
+        for idx, value in headers.items():
+
+            if "наименование" in value and col_counterparty is None:
+                col_counterparty = idx
+
+            if "стоимость" in value and col_amount is None:
+                col_amount = idx
+
+            if "ндс" in value and col_vat is None:
+                col_vat = idx
+
+        if col_counterparty is None or col_vat is None:
+            raise Exception("Не найдены ключевые колонки")
+
         records = []
+        start_row = header_row + 1
 
-        for idx in range(start_row, len(df)):
+        for i in range(start_row, len(df)):
 
-            row = df.iloc[idx]
-            cell0 = str(row[0]).strip().lower()
+            row = df.iloc[i]
+            first_cell = row[0].strip().lower()
 
-            if not cell0:
+            if not first_cell:
                 continue
 
-            if "всего" in cell0:
+            if "всего" in first_cell:
                 break
 
-            if not cell0.replace(".", "", 1).isdigit():
+            if not first_cell.replace(".", "", 1).isdigit():
                 continue
 
-            counterparty = str(row[col_counterparty]).strip()
+            counterparty = row[col_counterparty].strip()
             if not counterparty:
                 continue
 
@@ -1109,247 +1377,34 @@ class MainWindow(QMainWindow):
             if amount == 0 and vat == 0:
                 continue
 
-            record = {
+            records.append({
                 "company": company,
-                "period_start": date_start,
-                "period_end": date_end,
-                "doc_type": ledger_type,
-                "product_group": "Покупки" if ledger_type == "purchase" else "Продажи",
-                "nomenclature": counterparty,
+                "account": None,
+                "counterparty": counterparty,
+                "vat_amount": vat,
+                "debit_turnover": 0.0,
+                "credit_turnover": 0.0,
+                "period_start": period_start,
+                "period_end": period_end,
+                "doc_type": "purchase_book" if ledger_type == "purchase" else "sales_book",
                 "revenue": amount if ledger_type == "sales" else 0.0,
-                "vat_in_revenue": vat if ledger_type == "sales" else 0.0,
-                "cost_price": amount if ledger_type == "purchase" else 0.0,
-                "vat_deductible": vat if ledger_type == "purchase" else 0.0,
-                "vat_to_budget": vat if ledger_type == "sales" else 0.0,
-                "quantity": 1,
-                "gross_profit": 0.0,
-                "sales_expenses": 0.0,
-                "other_income_expenses": 0.0,
-                "net_profit": 0.0
-            }
-
-            records.append(record)
-
-        df_to_save = pd.DataFrame(records)
-        return self.db.save_data(df_to_save)
-
-    # ========== КНИГА ПОКУПОК (построчно) ==========
-    def _parse_purchase_ledger_detailed(self, file_path):
-        df = pd.read_excel(file_path, header=None)
-        header_text = self._flatten_text(df, slice(0, 5))
-        company = self._extract_company_from_text(header_text)
-        period = self._extract_period_from_text(header_text, file_path)
-        if df.empty:
-            raise ValueError("Файл пустой или данные не распознаны")
-        print(file_path)
-        print(df.head())
-        print(df.shape)
-        print(f"\n--- Книга покупок: {os.path.basename(file_path)} ---")
-        for i in range(min(20, len(df))):
-            print(f"Строка {i}: {df.iloc[i].tolist()}")
-
-        # Находим строку с номерами колонок (1, 2, 3...)
-        for i in range(len(df)):
-            row_values = df.iloc[i].astype(str).str.strip().tolist()
-
-            if row_values[:5] == ['1', '2', '3', '4', '5']:
-                header_row = i
-                break
-
-        if header_row is None:
-            print("Не найдена строка с номерами колонок")
-            return 0
-
-        # Данные начинаются со следующей строки
-        start_row = header_row + 1
-        data_rows = []
-
-        for idx in range(start_row, len(df)):
-            row = df.iloc[idx]
-            # Пропускаем пустые строки
-            if pd.isna(row[0]) or str(row[0]).strip() == '':
-                continue
-
-            # Проверяем на итоговую строку
-            if 'всего' in str(row[0]).lower():
-                total_vat = self._clean_number(row[14]) if len(row) > 14 else 0.0
-                if total_vat != 0.0:
-                    data_rows.append({
-                        'period': period,
-                        'company': company,
-                        'product_group': 'НДС к вычету',
-                        'nomenclature': 'Итого по книге покупок',
-                        'revenue': 0.0,
-                        'vat_in_revenue': 0.0,
-                        'cost_price': 0.0,
-                        'gross_profit': 0.0,
-                        'sales_expenses': 0.0,
-                        'other_income_expenses': 0.0,
-                        'net_profit': 0.0,
-                        'vat_deductible': total_vat,
-                        'vat_to_budget': 0.0,
-                        'quantity': 0
-                    })
-                break
-
-            # Проверяем, что строка похожа на данные (в первой колонке число)
-            if not str(row[0]).strip().replace('.','',1).replace('-','',1).isdigit():
-                continue
-
-            seller = str(row[8]).strip() if len(row) > 8 and not pd.isna(row[8]) else ''
-            if not seller:
-                continue
-
-            cost = self._clean_number(row[13]) if len(row) > 13 else 0.0
-            vat = self._clean_number(row[14]) if len(row) > 14 else 0.0
-            if vat == 0.0 and len(row) > 18:
-                vat = self._clean_number(row[18])
-
-            if cost == 0.0 and vat == 0.0:
-                continue
-
-            data_rows.append({
-                'period': period,
-                'company': company,
-                'product_group': 'Покупки',
-                'nomenclature': seller.strip(),
-                'revenue': cost,
-                'vat_in_revenue': 0.0,
-                'cost_price': 0.0,
-                'gross_profit': 0.0,
-                'sales_expenses': 0.0,
-                'other_income_expenses': 0.0,
-                'net_profit': 0.0,
-                'vat_deductible': vat,
-                'vat_to_budget': 0.0,
-                'quantity': 0
+                "cost_price": amount if ledger_type == "purchase" else 0.0
             })
 
-        if not data_rows:
-            print("Нет данных в книге покупок")
-            return 0
+        return pd.DataFrame(records)
 
-        df_result = pd.DataFrame(data_rows)
-        df_result['quantity'] = df_result['quantity'].astype(int)
-        numeric_cols = ['revenue','vat_in_revenue','cost_price','gross_profit','sales_expenses','other_income_expenses','net_profit','vat_deductible','vat_to_budget']
-        for col in numeric_cols:
-            if col in df_result.columns:
-                df_result[col] = pd.to_numeric(df_result[col], errors='coerce').fillna(0)
-        saved = self.db.save_data(df_result)
-        print(f"Сохранено {saved} записей из книги покупок")
-        return saved
-
-    # ========== КНИГА ПРОДАЖ (построчно) ==========
-    def _parse_sales_ledger_detailed(self, file_path):
-        df = pd.read_excel(file_path, header=None)
-        header_text = self._flatten_text(df, slice(0, 5))
-        company = self._extract_company_from_text(header_text)
-        period = self._extract_period_from_text(header_text, file_path)
-        if df.empty:
-            raise ValueError("Файл пустой или данные не распознаны")
-        print(file_path)
-        print(df.head())
-        print(df.shape)
-        print(f"\n--- Книга продаж: {os.path.basename(file_path)} ---")
-        for i in range(min(20, len(df))):
-            print(f"Строка {i}: {df.iloc[i].tolist()}")
-
-        # Находим строку с номерами колонок (1, 2, 3...)
-        header_row = None
-        for i in range(len(df)):
-            row = df.iloc[i]
-            if len(row) > 1:
-                first = str(row[0]).strip()
-                second = str(row[1]).strip()
-                if first == '1' and second == '2':
-                    header_row = i
-                    break
-        if header_row is None:
-            raise ValueError("Не удалось найти строку с номерами колонок в книге продаж")
-
-        # Находим первую строку данных (где в колонке 0 стоит '1')
-        data_start_row = None
-        for idx in range(header_row + 1, len(df)):
-            cell0 = str(df.iloc[idx, 0]).strip()
-            if cell0 == '1' or cell0 == '1.0':
-                data_start_row = idx
-                break
-        if data_start_row is None:
-            data_start_row = header_row + 1  # запасной вариант
-
-        data_rows = []
-        for idx in range(data_start_row, len(df)):
-            row = df.iloc[idx]
-            if pd.isna(row[0]) or str(row[0]).strip() == '':
-                continue
-
-            if 'всего' in str(row[0]).lower():
-                total_vat = self._clean_number(row[14]) if len(row) > 14 else 0.0
-                if total_vat != 0.0:
-                    data_rows.append({
-                        'period': period,
-                        'company': company,
-                        'product_group': 'НДС начисленный',
-                        'nomenclature': 'Итого по книге продаж',
-                        'revenue': 0.0,
-                        'vat_in_revenue': total_vat,
-                        'cost_price': 0.0,
-                        'gross_profit': 0.0,
-                        'sales_expenses': 0.0,
-                        'other_income_expenses': 0.0,
-                        'net_profit': 0.0,
-                        'vat_deductible': 0.0,
-                        'vat_to_budget': total_vat,
-                        'quantity': 0
-                    })
-                break
-
-            # Проверяем, что первая колонка похожа на номер (цифра)
-            if not str(row[0]).strip().replace('.','',1).replace('-','',1).isdigit():
-                continue
-
-            buyer = str(row[8]).strip() if len(row) > 8 and not pd.isna(row[8]) else ''
-            if not buyer:
-                continue
-
-            revenue = self._clean_number(row[13]) if len(row) > 13 else 0.0
-            vat = self._clean_number(row[14]) if len(row) > 14 else 0.0
-
-            if revenue == 0.0 and vat == 0.0:
-                continue
-
-            data_rows.append({
-                'period': period,
-                'company': company,
-                'product_group': 'Продажи',
-                'nomenclature': buyer.strip(),
-                'revenue': revenue,
-                'vat_in_revenue': vat,
-                'cost_price': 0.0,
-                'gross_profit': 0.0,
-                'sales_expenses': 0.0,
-                'other_income_expenses': 0.0,
-                'net_profit': 0.0,
-                'vat_deductible': 0.0,
-                'vat_to_budget': vat,
-                'quantity': 0
-            })
-
-        if not data_rows:
-            print("Нет данных в книге продаж")
-            return 0
-
-        df_result = pd.DataFrame(data_rows)
-        df_result['quantity'] = df_result['quantity'].astype(int)
-        numeric_cols = ['revenue','vat_in_revenue','cost_price','gross_profit','sales_expenses','other_income_expenses','net_profit','vat_deductible','vat_to_budget']
-        for col in numeric_cols:
-            if col in df_result.columns:
-                df_result[col] = pd.to_numeric(df_result[col], errors='coerce').fillna(0)
-        saved = self.db.save_data(df_result)
-        print(f"Сохранено {saved} записей из книги продаж")
-        return saved
+    # ==========================================
+    # Обёртка для покупок
+    def _parse_purchase_book(self, file_path):
+        return self._parse_ledger_universal(file_path, "purchase")
+    
+    # ==========================================
+    # Обёртка для продаж
+    def _parse_sales_book(self, file_path):
+        return self._parse_ledger_universal(file_path, "sales")
 
     # ========== ОСВ 19 (по контрагентам) ==========
+    
     def _parse_osv_19_detailed(self, file_path):
 
         import pandas as pd
@@ -1357,14 +1412,32 @@ class MainWindow(QMainWindow):
 
         df = pd.read_excel(file_path, header=None)
 
-        pd.set_option('display.max_rows', None)
-        print(df.iloc[12:189])
-
         records = []
         current_account = None
         period = None
 
-        # --- 1. Поиск периода ---
+        # ---------- ВСПОМОГАТЕЛЬНАЯ ОЧИСТКА ЧИСЕЛ ----------
+        def clean_number(value):
+            if pd.isna(value):
+                return 0.0
+
+            value = str(value).strip()
+
+            if value == "" or value.lower() == "nan":
+                return 0.0
+
+            # убираем пробелы-разделители тысяч
+            value = value.replace(" ", "")
+
+            # заменяем запятую на точку
+            value = value.replace(",", ".")
+
+            try:
+                return float(value)
+            except:
+                return 0.0
+
+        # ---------- 1. Поиск периода ----------
         for i in range(len(df)):
             cell = str(df.iloc[i, 0])
             if "Период" in cell:
@@ -1374,17 +1447,17 @@ class MainWindow(QMainWindow):
         if not period:
             raise Exception("В файле ОСВ не найден период")
 
-        # --- 2. Основной цикл ---
+        # ---------- 2. Основной цикл ----------
         for idx in range(len(df)):
 
             name = str(df.iloc[idx, 0]).strip()
 
-            if not name or name == "nan":
+            if not name or name.lower() == "nan":
                 continue
 
             name_lower = name.lower()
 
-            # --- 2.1 Определяем счет 19 / 19.03 / 19.04 ---
+            # --- 2.1 Определяем счет (19 / 19.03 / 19.04 ...) ---
             if re.fullmatch(r'\d+(\.\d+)?', name):
                 current_account = name
                 continue
@@ -1400,54 +1473,51 @@ class MainWindow(QMainWindow):
             # --- 2.4 Обработка контрагента ---
             if current_account:
 
+                # 4 и 5 колонки = обороты за период
                 debit_raw = df.iloc[idx, 3]
                 credit_raw = df.iloc[idx, 4]
 
-                debit = self._clean_number(debit_raw)
-                credit = self._clean_number(credit_raw)
+                debit = clean_number(debit_raw)
+                credit = clean_number(credit_raw)
 
-                # если нет оборотов — пропускаем
-                if debit == 0 and credit == 0:
+                # если реально нет оборотов — пропускаем
+                if debit == 0.0 and credit == 0.0:
                     continue
 
                 record = {
-                    "account": current_account,
+                    "account": str(current_account),
                     "counterparty": name,
-                    "debit_turnover": debit,
-                    "credit_turnover": credit,
-                    "period": period
+                    "debit_turnover": float(debit),
+                    "credit_turnover": float(credit),
+                    "period": str(period)
                 }
 
                 records.append(record)
 
-        # --- 3. Результат ---
+        # ---------- 3. Возврат результата ----------
         if not records:
             print("⚠ ОСВ 19: записи не найдены")
             return pd.DataFrame()
 
         result_df = pd.DataFrame(records)
 
+        # ГАРАНТИЯ ТИПОВ
+        result_df["debit_turnover"] = pd.to_numeric(
+            result_df["debit_turnover"], errors="coerce"
+        ).fillna(0.0)
+
+        result_df["credit_turnover"] = pd.to_numeric(
+            result_df["credit_turnover"], errors="coerce"
+        ).fillna(0.0)
+
+        result_df["account"] = result_df["account"].astype(str)
+        result_df["counterparty"] = result_df["counterparty"].astype(str)
+        result_df["period"] = result_df["period"].astype(str)
+
+        print(result_df.dtypes)
         print(f"ОСВ 19: найдено записей — {len(result_df)}")
 
         return result_df
-    
-    def _clean_number(self, value):
-
-        import pandas as pd
-
-        if pd.isna(value):
-            return 0
-
-        s = str(value)
-        s = s.replace(" ", "")
-        s = s.replace("\xa0", "")
-        s = s.replace(",", ".")
-        s = s.strip()
-
-        try:
-            return float(s)
-        except:
-            return 0
 
     # ========== ОСВ 41 (по номенклатуре) ==========
     def _parse_osv_41_detailed(self, df, company, period):
@@ -2425,7 +2495,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v5.4.0</p>
+        <p><b>Версия программы:</b> v5.6.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
