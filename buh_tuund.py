@@ -1,5 +1,5 @@
 #=====================================================
-# Buh_Tuund v5.7.0
+# Buh_Tuund v5.8.0
 
 import sys
 import os
@@ -39,7 +39,6 @@ class DatabaseManager:
         
     def create_tables(self):
         cursor = self.conn.cursor()
-
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS reports (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,7 +61,26 @@ class DatabaseManager:
                 import_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-
+        
+        # Добавляем новые колонки, если их нет
+        cursor.execute("PRAGMA table_info(reports)")
+        existing = [col[1] for col in cursor.fetchall()]
+        
+        new_columns = {
+            'seller': 'TEXT',
+            'buyer': 'TEXT',
+            'document_number': 'TEXT',
+            'document_date': 'TEXT',
+            'operation_code': 'TEXT',
+            'acceptance_date': 'TEXT',
+            'purchase_amount_with_vat': 'REAL',
+            'sales_amount_without_vat': 'REAL'
+        }
+        
+        for col, typ in new_columns.items():
+            if col not in existing:
+                cursor.execute(f"ALTER TABLE reports ADD COLUMN {col} {typ}")
+        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS import_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +89,6 @@ class DatabaseManager:
                 import_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-
         self.conn.commit()
 
     def save_data(self, df):
@@ -2356,7 +2373,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v5.7.0</p>
+        <p><b>Версия программы:</b> v5.8.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
