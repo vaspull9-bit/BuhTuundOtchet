@@ -1,5 +1,5 @@
 #=====================================================
-# Buh_Tuund v5.12.0 Новая БД и новый парсер Книги Продаж
+# Buh_Tuund v5.13.0 Работа с парсерами книг продаж и аокупок. 
 
 import sys
 import os
@@ -96,9 +96,14 @@ class DatabaseManager:
     # Сохранение данных
 
     def save_data(self, df):
+        """
+        Сохраняет данные из DataFrame в таблицу reports.
+        Возвращает количество сохранённых записей.
+        """
+        # Создаём копию, чтобы не модифицировать исходный df
         df_to_save = df.copy()
 
-        # Список всех возможных колонок с типами по умолчанию
+        # Определяем все возможные колонки и их значения по умолчанию
         all_columns = {
             'company': '',
             'period_start': '',
@@ -118,6 +123,11 @@ class DatabaseManager:
             'quantity': 0,
             'seller': '',
             'buyer': '',
+            'document_number': '',
+            'document_date': '',
+            'operation_code': '',
+            'acceptance_date': '',
+            'payment_document': '',
             'purchase_amount_with_vat': 0.0,
             'sales_amount_without_vat': 0.0,
         }
@@ -127,21 +137,33 @@ class DatabaseManager:
             if col not in df_to_save.columns:
                 df_to_save[col] = default
 
-        # Приведение типов для числовых колонок
-        numeric_cols = ['revenue', 'vat_in_revenue', 'cost_price', 'gross_profit',
-                        'sales_expenses', 'other_income_expenses', 'net_profit',
-                        'vat_deductible', 'vat_to_budget', 'purchase_amount_with_vat',
-                        'sales_amount_without_vat']
+        # Список числовых колонок (REAL)
+        numeric_cols = [
+            'revenue', 'vat_in_revenue', 'cost_price', 'gross_profit',
+            'sales_expenses', 'other_income_expenses', 'net_profit',
+            'vat_deductible', 'vat_to_budget', 'purchase_amount_with_vat',
+            'sales_amount_without_vat'
+        ]
         for col in numeric_cols:
             if col in df_to_save.columns:
                 df_to_save[col] = pd.to_numeric(df_to_save[col], errors='coerce').fillna(0.0)
 
+        # Колонка quantity – целое число
         if 'quantity' in df_to_save.columns:
             df_to_save['quantity'] = pd.to_numeric(df_to_save['quantity'], errors='coerce').fillna(0).astype(int)
 
-        # Вставляем в базу
+        # Удаляем колонку id, если она есть, чтобы не конфликтовать с автоинкрементом
+        if 'id' in df_to_save.columns:
+            df_to_save = df_to_save.drop(columns=['id'])
+
+        # Вставляем в таблицу reports
         df_to_save.to_sql('reports', self.conn, if_exists='append', index=False)
         self.conn.commit()
+
+        # Можно добавить запись в историю импорта (если нужно)
+        # Здесь можно передать имя файла, но в данном методе его нет.
+        # Если хотите, можно расширить метод, принимая filename.
+
         return len(df_to_save)
     
     #========================================================================
@@ -459,8 +481,13 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.tab_widget)
         
         # Загрузка начальных данных
-        self.load_initial_data()
-
+        #self.load_initial_data()
+        self.current_df = pd.DataFrame()
+        self.display_data(self.current_df)
+        self.update_totals()
+        self.update_charts()
+        # Обновляем фильтры (они будут содержать только "Все")
+        self.update_filter_combos()
 
     def _finalize_and_save(self, data_rows):
         """
@@ -606,6 +633,31 @@ class MainWindow(QMainWindow):
         # Обходим детей
         for i in range(item.childCount()):
             self.get_checked_files(item.child(i), files)
+    
+    # =================================================================================
+    #  Импорт данных из шаблонного Excel-файла (старый формат сводного отчёта)
+
+    def import_from_template(self):
+        """Импорт данных из шаблонного Excel-файла (старый формат сводного отчёта)"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, 
+            "Выберите файл шаблона", 
+            "", 
+            "Excel Files (*.xlsx)"
+        )
+        if not file_path:
+            return
+        try:
+            records_count = self._import_legacy(file_path)
+            # Обновляем отображение
+            self.current_df = self.db.get_all_data()
+            self.display_data(self.current_df)
+            self.update_totals()
+            self.update_charts()
+            self.update_filter_combos()
+            QMessageBox.information(self, "Успех", f"Импортировано {records_count} записей")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось импортировать файл:\n{str(e)}")
 
     def process_selected_files(self):
         """Собирает отмеченные файлы и запускает их обработку."""
@@ -643,6 +695,78 @@ class MainWindow(QMainWindow):
             df_header = df_header.astype(str)
         df_header = df_header.fillna('')
         return ' '.join(df_header.values.flatten())
+
+
+    def update_filter_combos(self):
+        """Обновляет выпадающие списки фильтров на основе текущих данных."""
+        # Сохраняем текущие выбранные значения
+        current_company = self.company_combo.currentText()
+        current_period = self.period_combo.currentText()
+        current_group = self.group_combo.currentText()
+
+        # Очищаем комбобоксы
+        self.company_combo.clear()
+        self.period_combo.clear()
+        self.group_combo.clear()
+
+        # Добавляем "Все" варианты
+        self.company_combo.addItem("Все компании")
+        self.period_combo.addItem("Все периоды")
+        self.group_combo.addItem("Все группы")
+
+        if self.current_df is not None and not self.current_df.empty:
+            # Уникальные компании
+            companies = sorted(self.current_df['company'].dropna().unique())
+            self.company_combo.addItems([str(c) for c in companies])
+
+            # Уникальные периоды (период_start в формате YYYY-MM, преобразуем в MM.YYYY для отображения)
+            # Предполагаем, что period_start имеет формат YYYY-MM-DD
+            periods = set()
+            for date_str in self.current_df['period_start'].dropna().unique():
+                try:
+                    # Преобразуем в объект datetime и обратно в строку месяца
+                    dt = datetime.strptime(date_str, "%Y-%m-%d")
+                    periods.add(dt.strftime("%m.%Y"))
+                except:
+                    pass
+            self.period_combo.addItems(sorted(periods))
+
+            # Уникальные товарные группы
+            groups = sorted(self.current_df['product_group'].dropna().unique())
+            self.group_combo.addItems([str(g) for g in groups])
+
+        # Восстанавливаем выбор, если возможно
+        index = self.company_combo.findText(current_company)
+        if index >= 0:
+            self.company_combo.setCurrentIndex(index)
+        index = self.period_combo.findText(current_period)
+        if index >= 0:
+            self.period_combo.setCurrentIndex(index)
+        index = self.group_combo.findText(current_group)
+        if index >= 0:
+            self.group_combo.setCurrentIndex(index)
+
+    def _period_to_dates(self, period_str):
+        """
+        Преобразует строку периода вида "MM.YYYY" в даты начала и конца месяца.
+        Возвращает (start_date, end_date) в формате YYYY-MM-DD.
+        Если строка не распознана, возвращает (None, None).
+        """
+        import calendar
+        try:
+            month, year = period_str.split('.')
+            month = int(month)
+            year = int(year)
+            start_date = f"{year:04d}-{month:02d}-01"
+            # Последний день месяца
+            last_day = calendar.monthrange(year, month)[1]
+            end_date = f"{year:04d}-{month:02d}-{last_day:02d}"
+            return start_date, end_date
+        except:
+            return None, None
+    
+    # ==================================================
+    #  ШАБЛОН
 
     def download_template(self):
         """Создаёт и сохраняет шаблон Excel с нужными колонками"""
@@ -771,6 +895,7 @@ class MainWindow(QMainWindow):
             self.display_data(self.current_df)
             self.update_totals()
             self.update_charts()
+            self.update_filter_combos()
             QMessageBox.information(self, "Готово", "База данных очищена")
     
     # ================================================
@@ -795,6 +920,7 @@ class MainWindow(QMainWindow):
             self.display_data(self.current_df)
             self.update_totals()
             self.update_charts()
+            self.update_filter_combos()
             QMessageBox.information(self, "Успех", f"База данных загружена из {file_path}")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить базу данных:\n{str(e)}")
@@ -870,32 +996,6 @@ class MainWindow(QMainWindow):
 
         dialog.exec()
 
-    # ==================================================================================================
-    # """Загрузка начальных демо-данных"""
-    def load_initial_data(self):
-        """Загрузка начальных демо-данных"""
-        demo_data = {
-            'period': ['01.2026', '01.2026', '01.2026', '12.2025', '12.2025'],
-            'company': ['ООО "Ромашка"', 'ООО "Ромашка"', 'ООО "Василек"', 'ООО "Ромашка"', 'ООО "Василек"'],
-            'product_group': ['Электроника', 'Электроника', 'Мебель', 'Электроника', 'Офисная техника'],
-            'nomenclature': ['Смартфон X', 'Ноутбук Y', 'Стул офисный', 'Планшет Z', 'Принтер ABC'],
-            'revenue': [1200000, 1800000, 600000, 900000, 450000],
-            'vat_in_revenue': [200000, 300000, 100000, 150000, 75000],
-            'cost_price': [800000, 1200000, 350000, 600000, 300000],
-            'gross_profit': [400000, 600000, 250000, 300000, 150000],
-            'sales_expenses': [50000, 75000, 30000, 40000, 20000],
-            'other_income_expenses': [0, 0, 10000, -5000, 0],
-            'net_profit': [350000, 525000, 210000, 255000, 130000],
-            'vat_deductible': [90000, 150000, 40000, 70000, 35000],
-            'vat_to_budget': [110000, 150000, 60000, 80000, 40000],
-            'quantity': [100, 60, 200, 75, 50]
-        }
-        
-        self.current_df = pd.DataFrame(demo_data)
-        self.display_data(self.current_df)
-        self.update_totals()
-        self.update_charts()
-
     def _choose_folder(self, line_edit):
         folder = QFileDialog.getExistingDirectory(self, "Выберите папку")
         if folder:
@@ -968,6 +1068,7 @@ class MainWindow(QMainWindow):
            
             print(f"Загружено записей из БД: {len(self.current_df)}")
             self.display_data(self.current_df)
+            self.update_filter_combos()
             self.update_totals()
             # Защита от NaN в графиках
             try:
@@ -1136,69 +1237,119 @@ class MainWindow(QMainWindow):
     # Импорт эксель файлов
 
     def _import_excel_file(self, file_path):
+        print(f"Обработка файла: {os.path.basename(file_path)}")
 
-        if file_path.lower().endswith('.xlsx'):
+        # Проверка на временные файлы (начинающиеся с ~$)
+        if os.path.basename(file_path).startswith('~$'):
+            print("Пропуск временного файла")
+            return 0  # или raise, но лучше вернуть 0 и не считать ошибкой
+
+        # Для .xls файлов проверяем наличие xlrd (можно оставить)
+        if file_path.lower().endswith('.xls') and not file_path.lower().endswith('.xlsx'):
             try:
                 import xlrd
             except ImportError:
                 raise ImportError("Для чтения файлов .xls установите xlrd: pip install xlrd")
 
+        # Чтение первых строк для анализа
         try:
-            df_preview = pd.read_excel(file_path, nrows=10, header=None, dtype=str)
-        except:
-            df_preview = pd.read_excel(file_path, nrows=10, header=None)
-            df_preview = df_preview.astype(str)
+            df_preview = pd.read_excel(file_path, nrows=30, header=None, dtype=str)
+        except Exception as e:
+            print(f"Ошибка чтения с dtype=str: {e}")
+            # Пробуем без dtype
+            try:
+                df_preview = pd.read_excel(file_path, nrows=30, header=None)
+                df_preview = df_preview.astype(str)
+            except Exception as e2:
+                print(f"Не удалось прочитать файл {file_path}: {e2}")
+                raise ValueError(f"Не удалось прочитать файл: {e2}")
 
         df_preview = df_preview.fillna('')
         preview_text = ' '.join(df_preview.values.flatten()).lower()
+        preview_text = re.sub(r'\s+', ' ', preview_text)  # нормализация пробелов
+
+        print(f"preview_text (первые 200): {preview_text[:200]}")
 
         # ----------- КНИГИ -----------
         if 'книга покупок' in preview_text:
+            print("-> Распознана книга покупок")
             df = self._parse_purchase_book(file_path)
             return self.db.save_data(df)
 
-        elif 'книга продаж' in preview_text:
+        if 'книга продаж' in preview_text:
+            print("-> Распознана книга продаж")
             df = self._parse_sales_book(file_path)
             return self.db.save_data(df)
 
         # ----------- ОСВ -----------
-        elif 'оборотно-сальдовая ведомость по счету 19' in preview_text or 'анализ счета 19' in preview_text:
+        if 'оборотно-сальдовая ведомость по счету 19' in preview_text or 'анализ счета 19' in preview_text:
+            print("-> Распознан ОСВ 19")
             df = self._parse_osv_19_detailed(file_path)
             return self.db.save_data(df)
 
-        elif 'оборотно-сальдовая ведомость по счету 41' in preview_text:
+        if 'оборотно-сальдовая ведомость по счету 41' in preview_text:
+            print("-> Распознан ОСВ 41")
             df = self._parse_osv_41_detailed(file_path)
             return self.db.save_data(df)
 
-        elif 'оборотно-сальдовая ведомость по счету 44' in preview_text:
+        if 'оборотно-сальдовая ведомость по счету 44' in preview_text:
+            print("-> Распознан ОСВ 44")
             df = self._parse_osv_44_detailed(file_path)
             return self.db.save_data(df)
 
-        elif 'оборотно-сальдовая ведомость по счету 60' in preview_text:
+        if 'оборотно-сальдовая ведомость по счету 60' in preview_text:
+            print("-> Распознан ОСВ 60")
             df = self._parse_osv_60_detailed(file_path)
             return self.db.save_data(df)
 
-        elif 'оборотно-сальдовая ведомость по счету 62' in preview_text:
+        if 'оборотно-сальдовая ведомость по счету 62' in preview_text:
+            print("-> Распознан ОСВ 62")
             df = self._parse_osv_62_detailed(file_path)
             return self.db.save_data(df)
 
-        elif 'оборотно-сальдовая ведомость по счету 68' in preview_text:
+        if 'оборотно-сальдовая ведомость по счету 68' in preview_text:
+            print("-> Распознан ОСВ 68")
             df = self._parse_osv_68_detailed(file_path)
             return self.db.save_data(df)
 
-        elif 'оборотно-сальдовая ведомость по счету 90' in preview_text:
+        if 'оборотно-сальдовая ведомость по счету 90' in preview_text:
+            print("-> Распознан ОСВ 90")
             df = self._parse_osv_90_detailed(file_path)
             return self.db.save_data(df)
 
-        elif 'оборотно-сальдовая ведомость по счету 91' in preview_text:
+        if 'оборотно-сальдовая ведомость по счету 91' in preview_text:
+            print("-> Распознан ОСВ 91")
             df = self._parse_osv_91_detailed(file_path)
             return self.db.save_data(df)
 
-        elif 'отчет по продажам' in preview_text:
+        if 'отчет по продажам' in preview_text:
+            print("-> Распознан отчет по продажам")
             return self._parse_sales_report_detailed(file_path)
-            
-        else:
-            return self._import_legacy(file_path)
+
+        # Если ничего не подошло – пробуем старый формат
+        print("-> Не распознан тип, пробуем legacy импорт")
+        return self._import_legacy(file_path)
+        
+    #==================================================
+    #  """Извлекает из ячейки число, отбрасывая последующие буквы."""
+
+    def _extract_base_number(self, cell):
+        """Извлекает из ячейки число, отбрасывая последующие буквы."""
+        import re
+        if not isinstance(cell, str):
+            cell = str(cell)
+        match = re.match(r'^(\d+)', cell.strip())
+        return int(match.group(1)) if match else None
+    # ==============================================================================
+    # """Принимает список значений строки-заголовка, возвращает словарь {базовый_номер: индекс_колонки} для первых вхождений."""
+    def _find_column_indices(self, header_row):
+        """Принимает список значений строки-заголовка, возвращает словарь {базовый_номер: индекс_колонки} для первых вхождений."""
+        indices = {}
+        for idx, cell in enumerate(header_row):
+            base = self._extract_base_number(cell)
+            if base is not None and base not in indices:
+                indices[base] = idx
+        return indices
     
     #======================================================================================================================
     # Расчет НДС за период
@@ -1448,8 +1599,6 @@ class MainWindow(QMainWindow):
 
     # =============================================================
     #  ============  НОВАЯ КНИГА ПОКУПОК ==============================
-
-    
     def _parse_purchase_book(self, file_path):
         import pandas as pd
         import re
@@ -1461,15 +1610,14 @@ class MainWindow(QMainWindow):
 
         # --- 1. Извлекаем компанию (нашу фирму) ---
         company = "Неизвестная компания"
-        for i in range(min(10, len(df))):
-            row = df.iloc[i].tolist()
-            for j, cell in enumerate(row):
-                if 'покупатель' in cell.lower():
-                    if j + 1 < len(row) and row[j + 1].strip():
-                        company = row[j + 1].strip()
-                        break
-            if company != "Неизвестная компания":
-                break
+        if len(df) > 2:
+            row2 = df.iloc[2].tolist()
+            if len(row2) > 1 and 'покупатель' in str(row2[0]).lower():
+                company = row2[1].strip()
+        # Если не сработало, используем поиск по ключевому слову
+        if company == "Неизвестная компания":
+            company = self._extract_company_by_keyword(df, "покупатель")
+        print(f"Книга покупок: компания = {company}")
 
         # --- 2. Извлекаем период ---
         header_text = ' '.join(df.iloc[:20].values.flatten()).lower()
@@ -1628,18 +1776,14 @@ class MainWindow(QMainWindow):
 
         # --- 1. Извлекаем компанию (наша фирма) по строке "Продавец" ---
         company = "Неизвестная компания"
-        for i in range(min(10, len(df))):
-            row = df.iloc[i].tolist()
-            for j, cell in enumerate(row):
-                if 'продавец' in cell.lower():
-                    # Ищем следующую непустую ячейку в этой строке
-                    for k in range(j+1, len(row)):
-                        if row[k].strip():
-                            company = row[k].strip()
-                            break
-                    break
-            if company != "Неизвестная компания":
-                break
+        if len(df) > 2:
+            row2 = df.iloc[2].tolist()
+            if len(row2) > 1 and 'продавец' in str(row2[0]).lower():
+                company = row2[1].strip()
+        # Если не сработало, используем поиск по ключевому слову
+        if company == "Неизвестная компания":
+            company = self._extract_company_by_keyword(df, "продавец")
+        print(f"Книга продаж: компания = {company}")
 
         # --- 2. Извлекаем период ---
         header_text = ' '.join(df.iloc[:20].values.flatten()).lower()
@@ -1979,6 +2123,7 @@ class MainWindow(QMainWindow):
             # Обновляем отображение после успешной загрузки
             self.current_df = self.db.get_all_data()  # или применить текущие фильтры
             self.display_data(self.current_df)
+            self.update_filter_combos()
             self.update_totals()
             self.update_charts()
             QMessageBox.information(
@@ -1991,25 +2136,43 @@ class MainWindow(QMainWindow):
                 f"Ошибка при загрузке файла {os.path.basename(file_path)}:\n{str(e)}"
             )
     
+    # =====================================================================================
+    # Вывод в центральное окно
+
     def display_data(self, df):
         """Отображает DataFrame в таблице с фиксированным порядком колонок"""
         self.table_model.setRowCount(0)
         
-        # Фиксированный порядок колонок (английские имена)
+        # Полный порядок колонок (английские имена)
         column_order = [
-            'period', 'company', 'product_group', 'nomenclature',
-            'revenue', 'vat_in_revenue', 'cost_price', 'gross_profit',
-            'sales_expenses', 'other_income_expenses', 'net_profit',
-            'vat_deductible', 'vat_to_budget', 'quantity', 'import_date'
+            'id', 'company', 'period_start', 'period_end', 'doc_type', 'product_group',
+            'seller', 'buyer', 'nomenclature',
+            'document_number', 'document_date', 'operation_code', 'acceptance_date', 'payment_document',
+            'purchase_amount_with_vat', 'sales_amount_without_vat',
+            'revenue', 'vat_in_revenue', 'cost_price', 'gross_profit', 'sales_expenses',
+            'other_income_expenses', 'net_profit', 'vat_deductible', 'vat_to_budget', 'quantity',
+            'import_date'
         ]
         
-        # Соответствие русских названий
+        # Русские названия для заголовков
         ru_headers = {
-            'period': 'Период',
+            'id': 'ID',
             'company': 'Компания',
-            'product_group': 'Товарная группа',
+            'period_start': 'Период с',
+            'period_end': 'Период по',
+            'doc_type': 'Тип документа',
+            'product_group': 'Группа',
+            'seller': 'Продавец',
+            'buyer': 'Покупатель',
             'nomenclature': 'Номенклатура',
-            'revenue': 'Выручка (с НДС)',
+            'document_number': '№ сч/ф',
+            'document_date': 'Дата сч/ф',
+            'operation_code': 'Код опер.',
+            'acceptance_date': 'Дата принятия',
+            'payment_document': 'Платёжный документ',
+            'purchase_amount_with_vat': 'Сумма покупки с НДС',
+            'sales_amount_without_vat': 'Сумма продажи без НДС',
+            'revenue': 'Выручка',
             'vat_in_revenue': 'НДС в выручке',
             'cost_price': 'Себестоимость',
             'gross_profit': 'Валовая прибыль',
@@ -2017,8 +2180,8 @@ class MainWindow(QMainWindow):
             'other_income_expenses': 'Прочие доходы/расходы',
             'net_profit': 'Чистая прибыль',
             'vat_deductible': 'НДС к вычету',
-            'vat_to_budget': 'НДС К УПЛАТЕ',
-            'quantity': 'Оборот (кол-во)',
+            'vat_to_budget': 'НДС к уплате',
+            'quantity': 'Кол-во',
             'import_date': 'Дата импорта'
         }
         
@@ -2034,12 +2197,13 @@ class MainWindow(QMainWindow):
             items = []
             for col in column_order:
                 value = row[col] if col in row.index else ''
-                # Форматирование для числовых колонок
-                if col in ['revenue', 'vat_in_revenue', 'cost_price', 'gross_profit',
+                # Форматирование числовых колонок
+                if col in ['purchase_amount_with_vat', 'sales_amount_without_vat', 
+                        'revenue', 'vat_in_revenue', 'cost_price', 'gross_profit',
                         'sales_expenses', 'other_income_expenses', 'net_profit',
                         'vat_deductible', 'vat_to_budget']:
                     if isinstance(value, (int, float)):
-                        display_value = f"{value:,.0f} ₽".replace(",", " ")
+                        display_value = f"{value:,.2f} ₽".replace(",", " ")
                     else:
                         display_value = str(value)
                 elif col == 'quantity':
@@ -2057,25 +2221,38 @@ class MainWindow(QMainWindow):
         # Автоматическая подгонка ширины колонок
         self.table_view.resizeColumnsToContents()
 
-
+    # =====================================================================================
     # """Применение фильтров"""
     def apply_filters(self):
-        """Применение фильтров"""
+        """Применение фильтров на основе выбранных значений."""
         company = self.company_combo.currentText()
         period = self.period_combo.currentText()
         product_group = self.group_combo.currentText()
-        
+
+        # Преобразуем период в даты
+        date_from = None
+        date_to = None
+        if period != "Все периоды":
+            date_from, date_to = self._period_to_dates(period)
+
         filtered_df = self.db.get_filtered_data(
-            company if company != "Все компании" else None,
-            period if period != "Все периоды" else None,
-            product_group if product_group != "Все группы" else None
+            company=company if company != "Все компании" else None,
+            date_from=date_from,
+            date_to=date_to,
+            product_group=product_group if product_group != "Все группы" else None
         )
-        
+
         if not filtered_df.empty:
             self.current_df = filtered_df
             self.display_data(filtered_df)
             self.update_totals()
-             # === ДОБАВЬТЕ ЭТУ СТРОКУ ДЛЯ ОБНОВЛЕНИЯ ГРАФИКОВ ===
+            self.update_charts()
+        else:
+            # Если нет данных, показываем пустую таблицу
+            self.current_df = pd.DataFrame()
+            self.display_data(self.current_df)
+            self.update_filter_combos()
+            self.update_totals()
             self.update_charts()
     
     def update_totals(self):
@@ -2547,7 +2724,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v5.12.0</p>
+        <p><b>Версия программы:</b> v5.13.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
