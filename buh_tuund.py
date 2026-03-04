@@ -1,5 +1,5 @@
 #=====================================================
-# Buh_Tuund v5.11.0
+# Buh_Tuund v5.12.0 Новая БД и новый парсер Книги Продаж
 
 import sys
 import os
@@ -73,6 +73,7 @@ class DatabaseManager:
             'document_date': 'TEXT',
             'operation_code': 'TEXT',
             'acceptance_date': 'TEXT',
+            'payment_document': 'TEXT',          # <-- новое поле            
             'purchase_amount_with_vat': 'REAL',
             'sales_amount_without_vat': 'REAL'
         }
@@ -91,37 +92,60 @@ class DatabaseManager:
         ''')
         self.conn.commit()
 
+    #=============================================================================
+    # Сохранение данных
+
     def save_data(self, df):
-        """
-        Сохраняет данные из DataFrame в таблицу reports.
-        Предварительно приводит колонки к нужным типам.
-        Возвращает количество сохранённых записей.
-        """
-        # Создаём копию, чтобы не менять исходный df
         df_to_save = df.copy()
 
-        # Список числовых колонок (REAL)
+        # Список всех возможных колонок с типами по умолчанию
+        all_columns = {
+            'company': '',
+            'period_start': '',
+            'period_end': '',
+            'doc_type': '',
+            'product_group': '',
+            'nomenclature': '',
+            'revenue': 0.0,
+            'vat_in_revenue': 0.0,
+            'cost_price': 0.0,
+            'gross_profit': 0.0,
+            'sales_expenses': 0.0,
+            'other_income_expenses': 0.0,
+            'net_profit': 0.0,
+            'vat_deductible': 0.0,
+            'vat_to_budget': 0.0,
+            'quantity': 0,
+            'seller': '',
+            'buyer': '',
+            'purchase_amount_with_vat': 0.0,
+            'sales_amount_without_vat': 0.0,
+        }
+
+        # Добавляем недостающие колонки со значениями по умолчанию
+        for col, default in all_columns.items():
+            if col not in df_to_save.columns:
+                df_to_save[col] = default
+
+        # Приведение типов для числовых колонок
         numeric_cols = ['revenue', 'vat_in_revenue', 'cost_price', 'gross_profit',
                         'sales_expenses', 'other_income_expenses', 'net_profit',
-                        'vat_deductible', 'vat_to_budget']
-        # Приводим каждую к float, заменяем NaN на 0.0
+                        'vat_deductible', 'vat_to_budget', 'purchase_amount_with_vat',
+                        'sales_amount_without_vat']
         for col in numeric_cols:
             if col in df_to_save.columns:
                 df_to_save[col] = pd.to_numeric(df_to_save[col], errors='coerce').fillna(0.0)
 
-        # Колонка quantity должна быть целым числом
         if 'quantity' in df_to_save.columns:
             df_to_save['quantity'] = pd.to_numeric(df_to_save['quantity'], errors='coerce').fillna(0).astype(int)
 
-        # Остальные колонки (period, company, product_group, nomenclature) уже строки, оставляем как есть
-
-        # Вставляем в базу данных
+        # Вставляем в базу
         df_to_save.to_sql('reports', self.conn, if_exists='append', index=False)
         self.conn.commit()
-
-        # Записываем в историю (можно добавить имя файла, но его нет в параметрах; можно передавать отдельно)
-        # Пока пропустим или оставим как есть
         return len(df_to_save)
+    
+    #========================================================================
+    # Получить дату
 
     def get_all_data(self):
         query = "SELECT * FROM reports ORDER BY period_start DESC, company, doc_type"
@@ -672,8 +696,29 @@ class MainWindow(QMainWindow):
         toolbar.setIconSize(QSize(24, 24))
         self.addToolBar(toolbar)
 
-        # Убраны кнопки загрузки файлов и папки
+        # Кнопки управления БД
+        load_db_action = QAction("📂 Загрузить БД", self)
+        load_db_action.triggered.connect(self.load_database)
+        toolbar.addAction(load_db_action)
 
+        save_db_action = QAction("💾 Сохранить БД", self)
+        save_db_action.triggered.connect(self.save_database)
+        toolbar.addAction(save_db_action)
+
+        save_as_action = QAction("📁 Сохранить БД как...", self)
+        save_as_action.triggered.connect(self.save_database_as)
+        toolbar.addAction(save_as_action)
+
+        clear_db_action = QAction("🗑️ Очистить БД", self)
+        clear_db_action.triggered.connect(self.clear_database)
+        toolbar.addAction(clear_db_action)
+
+        import_template_action = QAction("📥 Импорт из шаблона", self)
+        import_template_action.triggered.connect(self.import_from_template)
+        toolbar.addAction(import_template_action)
+
+        toolbar.addSeparator()
+        
         # Кнопка экспорта в Excel
         export_excel_action = QAction("📊 Экспорт в Excel", self)
         export_excel_action.triggered.connect(self.export_to_excel)
@@ -708,7 +753,89 @@ class MainWindow(QMainWindow):
         about_action.triggered.connect(self.show_about)
         toolbar.addAction(about_action)
 
+    # ================================================
+    # очистка БД
 
+    def clear_database(self):
+        reply = QMessageBox.question(
+            self,
+            "Подтверждение",
+            "Вы действительно хотите удалить все данные из текущей базы?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            cursor = self.db.conn.cursor()
+            cursor.execute("DELETE FROM reports")
+            self.db.conn.commit()
+            self.current_df = pd.DataFrame()
+            self.display_data(self.current_df)
+            self.update_totals()
+            self.update_charts()
+            QMessageBox.information(self, "Готово", "База данных очищена")
+    
+    # ================================================
+    # Загрузка БД
+    def load_database(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выберите файл базы данных",
+            "",
+            "SQLite DB (*.db)"
+        )
+        if not file_path:
+            return
+
+        try:
+            # Закрываем текущее соединение
+            self.db.conn.close()
+            # Создаём новый экземпляр DatabaseManager с выбранным файлом
+            self.db = DatabaseManager(db_path=file_path)
+            # Загружаем данные
+            self.current_df = self.db.get_all_data()
+            self.display_data(self.current_df)
+            self.update_totals()
+            self.update_charts()
+            QMessageBox.information(self, "Успех", f"База данных загружена из {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить базу данных:\n{str(e)}")
+    
+    
+    # ================================================
+    # Сохранить  БД как
+    def save_database_as(self):
+        # Получаем путь к текущему файлу БД
+        cursor = self.db.conn.execute("PRAGMA database_list")
+        row = cursor.fetchone()  # (seq, name, file)
+        if row is None or not row[2]:
+            QMessageBox.warning(self, "Предупреждение", "Не удалось определить путь к текущей базе данных")
+            return
+        current_db_path = row[2]
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить базу данных как",
+            "",
+            "SQLite DB (*.db)"
+        )
+        if not file_path:
+            return
+
+        try:
+            import shutil
+            shutil.copy2(current_db_path, file_path)
+            QMessageBox.information(self, "Успех", f"База данных сохранена как {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить базу данных:\n{str(e)}")
+    
+    # ================================================
+    # Сохранить  БД
+    
+    def save_database(self):
+        # commit уже происходит при каждом изменении, но можно просто уведомить
+        QMessageBox.information(self, "Сохранение", "Все изменения уже сохранены в текущей базе данных.")
+
+    # =======================================================================
+    # Меню настроек
     def show_settings(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("Настройки")
@@ -1328,41 +1455,43 @@ class MainWindow(QMainWindow):
         import re
         from datetime import datetime
 
+        # Чтение файла
         df = pd.read_excel(file_path, header=None, dtype=str)
         df = df.fillna('').astype(str).apply(lambda col: col.str.strip())
 
-        # Извлекаем компанию и период
-        header_text = ' '.join(df.iloc[:20].values.flatten()).lower()
-        company_match = re.search(r'покупатель\s+([^\d]+?)(?:\d|$)', header_text, re.IGNORECASE)
-        company = company_match.group(1).strip() if company_match else "Неизвестная компания"
+        # --- 1. Извлекаем компанию (нашу фирму) ---
+        company = "Неизвестная компания"
+        for i in range(min(10, len(df))):
+            row = df.iloc[i].tolist()
+            for j, cell in enumerate(row):
+                if 'покупатель' in cell.lower():
+                    if j + 1 < len(row) and row[j + 1].strip():
+                        company = row[j + 1].strip()
+                        break
+            if company != "Неизвестная компания":
+                break
 
+        # --- 2. Извлекаем период ---
+        header_text = ' '.join(df.iloc[:20].values.flatten()).lower()
         period_match = re.search(r'с\s+(\d{2}\.\d{2}\.\d{4})\s+по\s+(\d{2}\.\d{2}\.\d{4})', header_text, re.IGNORECASE)
         if not period_match:
             raise ValueError("Не найден период в книге покупок")
         period_start = datetime.strptime(period_match.group(1), "%d.%m.%Y").strftime("%Y-%m-%d")
         period_end = datetime.strptime(period_match.group(2), "%d.%m.%Y").strftime("%Y-%m-%d")
 
-        # Поиск строки с номерами колонок
+        # --- 3. Находим строку с номерами колонок ---
         header_row_idx = None
         num_to_idx = {}
         for i in range(len(df)):
             row = df.iloc[i].tolist()
-            # Собираем индексы, где значение является числом (целым)
+            # Собираем позиции чисел
             num_positions = []
-            numbers_found = []
             for j, val in enumerate(row):
                 if val.strip().isdigit():
                     num = int(val)
                     num_positions.append((j, num))
-                    numbers_found.append(num)
-            # Проверяем, есть ли последовательность 1,2,3,... подряд
-            if numbers_found:
-                # Ищем самую длинную возрастающую последовательность с шагом 1
-                # Упростим: проверим, есть ли в строке число 1, и затем последовательно ищем 2,3,... пока они есть
-                # Для этого отсортируем num_positions по индексу (они и так в порядке возрастания)
-                # Но числа могут идти не подряд из-за пропусков. Однако в нашем случае они должны быть подряд.
-                # Проверим, что числа идут по порядку: первое число должно быть 1, второе 2 и т.д.
-                start_idx = None
+            # Ищем последовательность 1,2,3... (хотя бы 5 чисел)
+            if num_positions:
                 expected = 1
                 found_seq = []
                 for pos, num in num_positions:
@@ -1370,13 +1499,12 @@ class MainWindow(QMainWindow):
                         found_seq.append((pos, num))
                         expected += 1
                     else:
-                        # Если не совпало, сбрасываем
                         found_seq = []
                         expected = 1
                         if num == 1:
                             found_seq.append((pos, num))
                             expected = 2
-                if len(found_seq) >= 5:  # нашли хотя бы 5 подряд идущих чисел
+                if len(found_seq) >= 5:
                     header_row_idx = i
                     for pos, num in found_seq:
                         num_to_idx[num] = pos
@@ -1386,16 +1514,19 @@ class MainWindow(QMainWindow):
             raise ValueError("Не найдена строка с номерами колонок")
 
         # Проверяем наличие нужных номеров
-        required = [9, 14, 15]
-        for num in required:
+        required_nums = [2, 3, 8, 9, 14, 15]  # код операции, счёт-фактура, дата учёта, продавец, сумма с НДС, НДС
+        for num in required_nums:
             if num not in num_to_idx:
-                raise ValueError(f"Не найден номер колонки {num} в строке заголовка")
+                raise ValueError(f"Не найден номер колонки {num}")
 
-        seller_col = num_to_idx[9]
-        amount_col = num_to_idx[14]
-        vat_col = num_to_idx[15]
+        op_col = num_to_idx[2]       # код вида операции
+        doc_col = num_to_idx[3]       # номер и дата счёта-фактуры
+        accept_col = num_to_idx[8]    # дата принятия на учёт
+        seller_col = num_to_idx[9]    # наименование продавца
+        amount_col = num_to_idx[14]   # стоимость с НДС
+        vat_col = num_to_idx[15]      # НДС
 
-        # Сбор данных
+        # --- 4. Сбор записей ---
         records = []
         current_seller = None
         data_start = header_row_idx + 1
@@ -1407,34 +1538,39 @@ class MainWindow(QMainWindow):
             if not first_cell:
                 continue
 
-            # Проверка на итоговые строки
+            # Останавливаемся при достижении строки "Всего"
             if 'всего' in first_cell:
-                # Если "всего по продавцу" - возможно, сбрасываем продавца и продолжаем
-                # Но в данных после "всего по продавцу" может идти новый продавец, поэтому не прерываем, а просто сбрасываем
-                if 'по продавцу' in first_cell:
-                    current_seller = None
-                    continue
-                else:
-                    # Это финальное "Всего" - заканчиваем
-                    break
+                break
 
-            # Проверяем, является ли первая ячейка числом (номер строки)
-            # Номер строки может быть целым числом (например, "1", "2")
+            # Если первая ячейка – число (номер строки)
             if first_cell.replace('.', '', 1).replace(',', '').isdigit():
-                # Это строка данных
                 seller = current_seller
-                # Если в колонке продавца что-то есть (не пусто и не равно текущему продавцу), используем его
+                # Если в колонке продавца что-то есть, используем его
                 if seller_col < len(row) and row[seller_col].strip():
                     seller = row[seller_col].strip()
                     current_seller = seller
                 elif not seller:
-                    # Если продавец не определён, пропускаем (обычно не должно быть)
-                    continue
+                    continue  # продавец не определён – пропускаем
 
-                amount_str = row[amount_col] if amount_col < len(row) else '0'
-                vat_str = row[vat_col] if vat_col < len(row) else '0'
-                amount = self._clean_number(amount_str)
-                vat = self._clean_number(vat_str)
+                # Извлекаем номер и дату документа из колонки 3 (формат "5 от 28.01.2025")
+                doc_str = row[doc_col] if doc_col < len(row) else ''
+                doc_number = ''
+                doc_date = ''
+                if doc_str:
+                    # Пытаемся разделить по " от " или похожему разделителю
+                    parts = re.split(r'\s+от\s+', doc_str, maxsplit=1, flags=re.IGNORECASE)
+                    if len(parts) == 2:
+                        doc_number = parts[0].strip()
+                        doc_date = parts[1].strip()
+                    else:
+                        # Если не удалось, просто сохраняем всю строку как номер
+                        doc_number = doc_str
+
+                operation_code = row[op_col] if op_col < len(row) else ''
+                acceptance_date = row[accept_col] if accept_col < len(row) else ''
+
+                amount = self._clean_number(row[amount_col] if amount_col < len(row) else '0')
+                vat = self._clean_number(row[vat_col] if vat_col < len(row) else '0')
 
                 if amount == 0 and vat == 0:
                     continue
@@ -1443,27 +1579,34 @@ class MainWindow(QMainWindow):
                     'company': company,
                     'period_start': period_start,
                     'period_end': period_end,
+                    'doc_type': 'purchase_book',
                     'product_group': 'Покупки',
-                    'nomenclature': seller,
+                    'seller': seller,
+                    'buyer': '',                     # не заполняем
+                    'document_number': doc_number,
+                    'document_date': doc_date,
+                    'operation_code': operation_code,
+                    'acceptance_date': acceptance_date,
+                    'purchase_amount_with_vat': amount,
+                    'sales_amount_without_vat': 0.0,
+                    'vat_deductible': vat,
+                    # Остальные поля (старые) заполняем нулями или пустыми строками
+                    'nomenclature': '',
                     'revenue': 0.0,
                     'vat_in_revenue': 0.0,
-                    'cost_price': amount,
+                    'cost_price': 0.0,
                     'gross_profit': 0.0,
                     'sales_expenses': 0.0,
                     'other_income_expenses': 0.0,
                     'net_profit': 0.0,
-                    'vat_deductible': vat,
                     'vat_to_budget': 0.0,
                     'quantity': 1
                 })
             else:
-                # Если первая ячейка не число, возможно это название нового продавца
-                # Но нужно исключить строки с кодами (например, "008", "010"), которые тоже могут быть не числами? Они выглядят как трёхзначные числа, но могут быть с лидирующими нулями, и isdigit() вернёт True? На самом деле "008".isdigit() вернёт True, потому что строка состоит из цифр. Значит, они попадут в ветку с числом. Но нам нужно их пропустить, потому что это не номера строк. Как отличить? Номер строки обычно однозначное или двузначное число, а коды вида "008" – трёхзначные с ведущим нулём. Можно проверить длину: если длина строки > 2 и она состоит из цифр, возможно это код операции. Но лучше добавить проверку, что если это число и оно меньше 100, то считаем номером строки, иначе пропускаем.
-                # Однако для простоты можно просто игнорировать строки, где первая ячейка состоит из трёх цифр (код) – они идут сразу после заголовка. Мы можем пропустить все строки до тех пор, пока не встретим первую строку с названием продавца или с номером строки. Но у нас есть явные строки с продавцом (например, "ООО КОМПАНИЯ"), которые не являются числами. Поэтому:
+                # Если первая ячейка не число – это может быть название продавца
+                # (строка типа "АО "АЙТИМ ТЕХНОЛОДЖИС"")
                 if not first_cell[0].isdigit():
-                    # Это не число, значит вероятно название продавца
                     current_seller = row[0].strip()
-                # Если это число, но не подходит под номер строки (например, трёхзначный код), мы ничего не делаем (пропускаем)
 
         if not records:
             raise ValueError("Не найдено записей в книге покупок")
@@ -1479,91 +1622,111 @@ class MainWindow(QMainWindow):
         import re
         from datetime import datetime
 
+        # Чтение файла
         df = pd.read_excel(file_path, header=None, dtype=str)
         df = df.fillna('').astype(str).apply(lambda col: col.str.strip())
-        if df.empty:
-            raise ValueError("Файл книги продаж пуст")
 
-        # --- Извлечение компании и периода ---
-        header_text = ' '.join(df.iloc[:15].values.flatten()).lower()
-        
-        # Продавец
-        company_match = re.search(r'продавец\s+([^\d]+?)(?:\d|$)', header_text, re.IGNORECASE)
-        company = company_match.group(1).strip() if company_match else "Неизвестно"
+        # --- 1. Извлекаем компанию (наша фирма) по строке "Продавец" ---
+        company = "Неизвестная компания"
+        for i in range(min(10, len(df))):
+            row = df.iloc[i].tolist()
+            for j, cell in enumerate(row):
+                if 'продавец' in cell.lower():
+                    # Ищем следующую непустую ячейку в этой строке
+                    for k in range(j+1, len(row)):
+                        if row[k].strip():
+                            company = row[k].strip()
+                            break
+                    break
+            if company != "Неизвестная компания":
+                break
 
+        # --- 2. Извлекаем период ---
+        header_text = ' '.join(df.iloc[:20].values.flatten()).lower()
         period_match = re.search(r'с\s+(\d{2}\.\d{2}\.\d{4})\s+по\s+(\d{2}\.\d{2}\.\d{4})', header_text, re.IGNORECASE)
         if not period_match:
             raise ValueError("Не найден период в книге продаж")
         period_start = datetime.strptime(period_match.group(1), "%d.%m.%Y").strftime("%Y-%m-%d")
         period_end = datetime.strptime(period_match.group(2), "%d.%m.%Y").strftime("%Y-%m-%d")
 
-        # --- Поиск строки с номерами колонок ---
-        header_row = None
+        # --- 3. Находим строку с номерами колонок (строка 12 в вашем примере) ---
+        header_row_idx = None
         for i in range(len(df)):
             row = df.iloc[i].tolist()
-            # Проверяем последовательность 1,2,3 в начале
-            if len(row) > 2 and row[0] == '1' and row[1] == '2' and row[2] == '3':
-                header_row = i
+            # Считаем ячейки, начинающиеся с цифры (базовые номера)
+            num_count = sum(1 for cell in row if self._extract_base_number(cell) is not None)
+            if num_count >= 10:  # достаточно много номеров – это заголовок
+                header_row_idx = i
                 break
 
-        if header_row is None:
-            raise ValueError("Не найдена строка с нумерацией колонок в книге продаж")
+        if header_row_idx is None:
+            raise ValueError("Не найдена строка с номерами колонок")
 
-        # --- Заголовки на предыдущей строке ---
-        title_row = header_row - 1
-        if title_row < 0:
-            raise ValueError("Строка с номерами колонок слишком близко к началу")
-        headers = df.iloc[title_row].tolist()
-        headers_lower = [str(h).lower() for h in headers]
+        # Получаем словарь "базовый номер -> индекс колонки"
+        header_row = df.iloc[header_row_idx].tolist()
+        col_indices = self._find_column_indices(header_row)
 
-        # Определяем индексы нужных колонок
-        col_buyer = None
-        col_amount_with_vat = None  # стоимость с НДС (по данным в колонке 14)
-        col_vat = None              # сумма НДС (по данным в колонке 17)
+        # Проверяем наличие нужных базовых номеров
+        required_nums = [2, 3, 7, 10, 14, 17]  # код опер., счёт-фактура, покупатель, док. оплаты, сумма с НДС, НДС
+        for num in required_nums:
+            if num not in col_indices:
+                raise ValueError(f"Не найден номер колонки {num}")
 
-        # Ищем по ключевым словам
-        for idx, h in enumerate(headers_lower):
-            if 'наименование покупателя' in h:
-                col_buyer = idx
-            # Для суммы с НДС: ищем "стоимость продаж" и, возможно, "включая ндс", но в шапке сложно
-            # Поэтому будем искать "стоимость продаж" и возьмём первую попавшуюся, но уточним
-            if 'стоимость продаж' in h and col_amount_with_vat is None:
-                col_amount_with_vat = idx
-            if 'сумма ндс' in h and col_vat is None:
-                col_vat = idx
+        op_col = col_indices[2]
+        doc_col = col_indices[3]
+        buyer_col = col_indices[7]
+        payment_col = col_indices[10]
+        amount_col = col_indices[14]
+        vat_col = col_indices[17]
 
-        # Если не нашли, используем фиксированные индексы (основываясь на примере)
-        if col_buyer is None:
-            # Покупатель обычно в колонке 7 (индекс 6)
-            col_buyer = 6
-        if col_amount_with_vat is None:
-            # Сумма с НДС в колонке 14 (индекс 13)
-            col_amount_with_vat = 13
-        if col_vat is None:
-            # НДС в колонке 17 (индекс 16)
-            col_vat = 16
-
-        # --- Сбор записей ---
+        # --- 4. Сбор записей ---
         records = []
         current_buyer = None
-        start_row = header_row + 1
+        data_start = header_row_idx + 1
 
-        for i in range(start_row, len(df)):
+        for i in range(data_start, len(df)):
             row = df.iloc[i].tolist()
-            if not row or not row[0]:
+            first_cell = row[0].strip().lower() if len(row) > 0 else ''
+
+            if not first_cell:
                 continue
 
-            first = row[0].strip().lower()
-            if 'всего' in first:
+            # Проверяем на "Всего по покупателю" – сбрасываем покупателя и пропускаем
+            if 'всего по покупателю' in first_cell:
+                current_buyer = None
+                continue
+
+            # Проверяем на финальное "Всего" – останавливаем сбор
+            if first_cell == 'всего' and 'по покупателю' not in first_cell:
                 break
 
-            # Проверяем, является ли первый элемент числом (номер строки)
-            if re.match(r'^\d+$', first):
-                if current_buyer is None:
-                    continue
+            # Если первая ячейка – число (порядковый номер)
+            if first_cell.replace('.', '', 1).replace(',', '').isdigit():
+                buyer = current_buyer
+                # Если в колонке покупателя что-то есть, используем его и обновляем current_buyer
+                if buyer_col < len(row) and row[buyer_col].strip():
+                    buyer = row[buyer_col].strip()
+                    current_buyer = buyer
+                elif not buyer:
+                    continue  # покупатель не определён – пропускаем
 
-                amount = self._clean_number(row[col_amount_with_vat] if col_amount_with_vat < len(row) else '0')
-                vat = self._clean_number(row[col_vat] if col_vat < len(row) else '0')
+                # Номер и дата счёта-фактуры (колонка 3)
+                doc_str = row[doc_col] if doc_col < len(row) else ''
+                doc_number = ''
+                doc_date = ''
+                if doc_str:
+                    parts = re.split(r'\s+от\s+', doc_str, maxsplit=1, flags=re.IGNORECASE)
+                    if len(parts) == 2:
+                        doc_number = parts[0].strip()
+                        doc_date = parts[1].strip()
+                    else:
+                        doc_number = doc_str
+
+                operation_code = row[op_col] if op_col < len(row) else ''
+                payment_doc = row[payment_col] if payment_col < len(row) else ''
+
+                amount = self._clean_number(row[amount_col] if amount_col < len(row) else '0')
+                vat = self._clean_number(row[vat_col] if vat_col < len(row) else '0')
 
                 if amount == 0 and vat == 0:
                     continue
@@ -1572,9 +1735,19 @@ class MainWindow(QMainWindow):
                     'company': company,
                     'period_start': period_start,
                     'period_end': period_end,
+                    'doc_type': 'sales_book',
                     'product_group': 'Продажи',
-                    'nomenclature': current_buyer,
-                    'revenue': amount,
+                    'seller': '',                     # не заполняем
+                    'buyer': buyer,
+                    'document_number': doc_number,
+                    'document_date': doc_date,
+                    'operation_code': operation_code,
+                    'payment_document': payment_doc,   # новое поле
+                    'sales_amount_without_vat': amount,  # здесь сумма с НДС
+                    'vat_to_budget': vat,
+                    # Остальные поля – нули / пусто
+                    'nomenclature': '',
+                    'revenue': amount,                     # для совместимости
                     'vat_in_revenue': vat,
                     'cost_price': 0.0,
                     'gross_profit': 0.0,
@@ -1582,18 +1755,19 @@ class MainWindow(QMainWindow):
                     'other_income_expenses': 0.0,
                     'net_profit': 0.0,
                     'vat_deductible': 0.0,
-                    'vat_to_budget': vat,
+                    'purchase_amount_with_vat': 0.0,
+                    'acceptance_date': '',                 # для книги покупок
                     'quantity': 1
                 })
             else:
-                # Это новый покупатель
-                if first and not first[0].isdigit():
+                # Если первая ячейка не число – возможно, это название нового покупателя
+                if not first_cell[0].isdigit():
                     current_buyer = row[0].strip()
-                    continue
 
         if not records:
             raise ValueError("Не найдено записей в книге продаж")
 
+        print(f"Книга продаж: найдено записей — {len(records)}")
         return pd.DataFrame(records)
 
     
@@ -2373,7 +2547,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v5.10.0</p>
+        <p><b>Версия программы:</b> v5.12.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
