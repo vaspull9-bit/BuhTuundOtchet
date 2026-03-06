@@ -1,5 +1,5 @@
 #=====================================================
-# Buh_Tuund v5.13.1 Книга покупок работает! 
+# Buh_Tuund v5.13.2 Книга покупок работает! 
 
 import sys
 import os
@@ -2855,7 +2855,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v5.13.1</p>
+        <p><b>Версия программы:</b> v5.13.2</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
