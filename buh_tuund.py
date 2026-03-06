@@ -1,5 +1,5 @@
 #=====================================================
-# Buh_Tuund v5.13.0 Работа с парсерами книг продаж и аокупок. 
+# Buh_Tuund v5.13.1 Книга покупок работает! 
 
 import sys
 import os
@@ -222,8 +222,11 @@ class DatabaseManager:
         query += " ORDER BY period_start DESC, company"
 
         return pd.read_sql_query(query, self.conn, params=params)
+# &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
 
-# ==================== ГЛАВНОЕ ОКНО ====================
+# ==================== ГЛАВНОЕ ОКНО class MainWindow  ====================
+
+# &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -734,7 +737,7 @@ class MainWindow(QMainWindow):
             # Уникальные товарные группы
             groups = sorted(self.current_df['product_group'].dropna().unique())
             self.group_combo.addItems([str(g) for g in groups])
-
+        #==============================================================================
         # Восстанавливаем выбор, если возможно
         index = self.company_combo.findText(current_company)
         if index >= 0:
@@ -1027,6 +1030,9 @@ class MainWindow(QMainWindow):
 
         self.process_files(excel_files)
 
+    
+    # ==================================================================================
+    ######  
     def process_files(self, file_paths):
         total = len(file_paths)
         if total == 0:
@@ -1052,8 +1058,19 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 error_files.append(f"{os.path.basename(file_path)}: {str(e)}")
 
+            if success_count > 0:
+                self.current_df = self.db.get_all_data()
+                self.display_data(self.current_df)
+                self.update_totals()
+                self.update_charts()
+                self.update_filter_combos()
+                print(f"Загружено записей из БД: {len(self.current_df)}")
+            else:
+                print("Нет успешно загруженных файлов")
+        
         progress.setValue(total)
 
+        # ===================================================================================
         # Обновляем отображение только если есть новые записи
         if success_count > 0:
             self.current_df = self.db.get_all_data()
@@ -1372,7 +1389,63 @@ class MainWindow(QMainWindow):
             "vat_input": purchase_vat,
             "vat_payable": sales_vat - purchase_vat
         }
+    # ======================================================================================================
+    #  Универсальный метод поиска строки с номерами колонок
+    def _find_header_row_fallback(self, df, min_count=5):
+        """
+        Запасной метод: ищет строку с максимальным количеством базовых номеров (не менее min_count).
+        Возвращает (индекс_строки, словарь {номер: индекс}).
+        """
+        best_row = None
+        best_indices = {}
+        max_count = 0
+        for i in range(len(df)):
+            row = df.iloc[i].tolist()
+            indices = {}
+            for col_idx, cell in enumerate(row):
+                base = self._extract_base_number(cell)
+                if base is not None and base not in indices:
+                    indices[base] = col_idx
+            if len(indices) >= min_count and len(indices) > max_count:
+                max_count = len(indices)
+                best_row = i
+                best_indices = indices
+        if best_row is not None:
+            return best_row, best_indices
+        return None, None
+    
+    # ====================================================================================
+    #  Исправление поиска строки с номерами колонок в книге продаж
+    def _find_header_row_by_sequence(self, df, min_length=5):
+        """
+        Ищет строку, в которой первые min_length ячеек содержат базовые номера 1,2,...,min_length.
+        Возвращает (индекс_строки, словарь {базовый_номер: индекс_колонки}).
+        Если не найдено, возвращает (None, None).
+        """
+        for i in range(len(df)):
+            row = df.iloc[i].tolist()
+            indices = {}
+            ok = True
+            # Проверяем первые min_length ячеек
+            for j in range(min_length):
+                if j >= len(row):
+                    ok = False
+                    break
+                base = self._extract_base_number(row[j])
+                if base != j + 1:
+                    ok = False
+                    break
+                indices[base] = j
+            if ok:
+                # Добавляем остальные номера, которые могут быть дальше
+                for j in range(min_length, len(row)):
+                    base = self._extract_base_number(row[j])
+                    if base is not None and base not in indices:
+                        indices[base] = j
+                return i, indices
+        return None, None
 
+    # ==============================================================================================
     # ========== Отдельный парсер ОСВ 68  ==========    
     def _parse_osv_68_detailed(self, file_path):
 
@@ -1593,6 +1666,35 @@ class MainWindow(QMainWindow):
 
     def _parse_osv_91_detailed(self, file_path):
         return self._parse_osv_generic(file_path, 91)
+    
+
+    def _find_header_row_by_sequence(self, df):
+        """
+        Ищет строку, в которой первые 5 ячеек содержат базовые номера 1,2,3,4,5.
+        Возвращает (индекс_строки, словарь {номер_колонки: индекс_ячейки} для всех найденных номеров в этой строке).
+        Если не найдено, возвращает (None, None).
+        """
+        for i in range(len(df)):
+            row = df.iloc[i].tolist()
+            if len(row) < 5:
+                continue
+            # Проверяем первые 5 ячеек
+            ok = True
+            indices = {}
+            for j in range(5):
+                base = self._extract_base_number(row[j])
+                if base != j + 1:
+                    ok = False
+                    break
+                indices[base] = j
+            if ok:
+                # Добавляем остальные номера из этой строки
+                for j in range(5, len(row)):
+                    base = self._extract_base_number(row[j])
+                    if base is not None and base not in indices:
+                        indices[base] = j
+                return i, indices
+        return None, None
       
     # =============================================================
     #  ============  НОВЫЕ КНИГИ ПОКУПОК М ПРОДАЖ
@@ -1604,19 +1706,23 @@ class MainWindow(QMainWindow):
         import re
         from datetime import datetime
 
-        # Чтение файла
         df = pd.read_excel(file_path, header=None, dtype=str)
         df = df.fillna('').astype(str).apply(lambda col: col.str.strip())
 
-        # --- 1. Извлекаем компанию (нашу фирму) ---
+        # --- 1. Извлекаем компанию (нашу фирму) по строке "Покупатель" ---
         company = "Неизвестная компания"
-        if len(df) > 2:
-            row2 = df.iloc[2].tolist()
-            if len(row2) > 1 and 'покупатель' in str(row2[0]).lower():
-                company = row2[1].strip()
-        # Если не сработало, используем поиск по ключевому слову
-        if company == "Неизвестная компания":
-            company = self._extract_company_by_keyword(df, "покупатель")
+        for i in range(min(10, len(df))):
+            row = df.iloc[i].tolist()
+            for j, cell in enumerate(row):
+                if 'покупатель' in cell.lower():
+                    for k in range(j+1, len(row)):
+                        if row[k].strip():
+                            company = row[k].strip()
+                            break
+                    if company != "Неизвестная компания":
+                        break
+            if company != "Неизвестная компания":
+                break
         print(f"Книга покупок: компания = {company}")
 
         # --- 2. Извлекаем период ---
@@ -1628,51 +1734,28 @@ class MainWindow(QMainWindow):
         period_end = datetime.strptime(period_match.group(2), "%d.%m.%Y").strftime("%Y-%m-%d")
 
         # --- 3. Находим строку с номерами колонок ---
-        header_row_idx = None
-        num_to_idx = {}
-        for i in range(len(df)):
-            row = df.iloc[i].tolist()
-            # Собираем позиции чисел
-            num_positions = []
-            for j, val in enumerate(row):
-                if val.strip().isdigit():
-                    num = int(val)
-                    num_positions.append((j, num))
-            # Ищем последовательность 1,2,3... (хотя бы 5 чисел)
-            if num_positions:
-                expected = 1
-                found_seq = []
-                for pos, num in num_positions:
-                    if num == expected:
-                        found_seq.append((pos, num))
-                        expected += 1
-                    else:
-                        found_seq = []
-                        expected = 1
-                        if num == 1:
-                            found_seq.append((pos, num))
-                            expected = 2
-                if len(found_seq) >= 5:
-                    header_row_idx = i
-                    for pos, num in found_seq:
-                        num_to_idx[num] = pos
-                    break
-
+        header_row_idx, num_to_idx = self._find_header_row_by_sequence(df)
         if header_row_idx is None:
-            raise ValueError("Не найдена строка с номерами колонок")
+            # Если не нашли по последовательности, пробуем запасной метод
+            header_row_idx, num_to_idx = self._find_header_row_fallback(df, min_count=8)
+            if header_row_idx is None:
+                raise ValueError("Не найдена строка с номерами колонок")
 
-        # Проверяем наличие нужных номеров
-        required_nums = [2, 3, 8, 9, 14, 15]  # код операции, счёт-фактура, дата учёта, продавец, сумма с НДС, НДС
+        print(f"Книга покупок: строка с номерами на индексе {header_row_idx}")
+        print(f"Соответствие номеров колонкам: {num_to_idx}")
+
+        # Проверяем наличие нужных логических номеров таблицы (для покупок)
+        required_nums = [2, 3, 8, 9, 14, 15]
         for num in required_nums:
             if num not in num_to_idx:
                 raise ValueError(f"Не найден номер колонки {num}")
 
-        op_col = num_to_idx[2]       # код вида операции
-        doc_col = num_to_idx[3]       # номер и дата счёта-фактуры
-        accept_col = num_to_idx[8]    # дата принятия на учёт
-        seller_col = num_to_idx[9]    # наименование продавца
-        amount_col = num_to_idx[14]   # стоимость с НДС
-        vat_col = num_to_idx[15]      # НДС
+        op_col = num_to_idx[2]
+        doc_col = num_to_idx[3]
+        accept_col = num_to_idx[8]
+        seller_col = num_to_idx[9]
+        amount_col = num_to_idx[14]
+        vat_col = num_to_idx[15]
 
         # --- 4. Сбор записей ---
         records = []
@@ -1686,32 +1769,34 @@ class MainWindow(QMainWindow):
             if not first_cell:
                 continue
 
-            # Останавливаемся при достижении строки "Всего"
-            if 'всего' in first_cell:
+            # Проверка на "Всего по продавцу" – сброс продавца
+            if 'всего по продавцу' in first_cell:
+                current_seller = None
+                continue
+
+            # Финальное "Всего" – остановка
+            if first_cell == 'всего' and 'по продавцу' not in first_cell:
                 break
 
-            # Если первая ячейка – число (номер строки)
+            # Если первая ячейка – число (порядковый номер)
             if first_cell.replace('.', '', 1).replace(',', '').isdigit():
                 seller = current_seller
-                # Если в колонке продавца что-то есть, используем его
                 if seller_col < len(row) and row[seller_col].strip():
                     seller = row[seller_col].strip()
                     current_seller = seller
                 elif not seller:
-                    continue  # продавец не определён – пропускаем
+                    continue
 
-                # Извлекаем номер и дату документа из колонки 3 (формат "5 от 28.01.2025")
+                # Номер и дата счёта-фактуры
                 doc_str = row[doc_col] if doc_col < len(row) else ''
                 doc_number = ''
                 doc_date = ''
                 if doc_str:
-                    # Пытаемся разделить по " от " или похожему разделителю
                     parts = re.split(r'\s+от\s+', doc_str, maxsplit=1, flags=re.IGNORECASE)
                     if len(parts) == 2:
                         doc_number = parts[0].strip()
                         doc_date = parts[1].strip()
                     else:
-                        # Если не удалось, просто сохраняем всю строку как номер
                         doc_number = doc_str
 
                 operation_code = row[op_col] if op_col < len(row) else ''
@@ -1730,7 +1815,7 @@ class MainWindow(QMainWindow):
                     'doc_type': 'purchase_book',
                     'product_group': 'Покупки',
                     'seller': seller,
-                    'buyer': '',                     # не заполняем
+                    'buyer': '',
                     'document_number': doc_number,
                     'document_date': doc_date,
                     'operation_code': operation_code,
@@ -1738,7 +1823,6 @@ class MainWindow(QMainWindow):
                     'purchase_amount_with_vat': amount,
                     'sales_amount_without_vat': 0.0,
                     'vat_deductible': vat,
-                    # Остальные поля (старые) заполняем нулями или пустыми строками
                     'nomenclature': '',
                     'revenue': 0.0,
                     'vat_in_revenue': 0.0,
@@ -1748,11 +1832,11 @@ class MainWindow(QMainWindow):
                     'other_income_expenses': 0.0,
                     'net_profit': 0.0,
                     'vat_to_budget': 0.0,
+                    'payment_document': '',
                     'quantity': 1
                 })
             else:
-                # Если первая ячейка не число – это может быть название продавца
-                # (строка типа "АО "АЙТИМ ТЕХНОЛОДЖИС"")
+                # Если первая ячейка не число – возможно, название продавца
                 if not first_cell[0].isdigit():
                     current_seller = row[0].strip()
 
@@ -1770,19 +1854,25 @@ class MainWindow(QMainWindow):
         import re
         from datetime import datetime
 
-        # Чтение файла
+        print(f"Парсер продаж: начало обработки {file_path}")
         df = pd.read_excel(file_path, header=None, dtype=str)
         df = df.fillna('').astype(str).apply(lambda col: col.str.strip())
+        print(f"Прочитано строк: {len(df)}")
 
-        # --- 1. Извлекаем компанию (наша фирма) по строке "Продавец" ---
+        # --- 1. Извлекаем компанию (нашу фирму) по строке "Продавец" ---
         company = "Неизвестная компания"
-        if len(df) > 2:
-            row2 = df.iloc[2].tolist()
-            if len(row2) > 1 and 'продавец' in str(row2[0]).lower():
-                company = row2[1].strip()
-        # Если не сработало, используем поиск по ключевому слову
-        if company == "Неизвестная компания":
-            company = self._extract_company_by_keyword(df, "продавец")
+        for i in range(min(10, len(df))):
+            row = df.iloc[i].tolist()
+            for j, cell in enumerate(row):
+                if 'продавец' in cell.lower():
+                    for k in range(j+1, len(row)):
+                        if row[k].strip():
+                            company = row[k].strip()
+                            break
+                    if company != "Неизвестная компания":
+                        break
+            if company != "Неизвестная компания":
+                break
         print(f"Книга продаж: компания = {company}")
 
         # --- 2. Извлекаем период ---
@@ -1792,36 +1882,36 @@ class MainWindow(QMainWindow):
             raise ValueError("Не найден период в книге продаж")
         period_start = datetime.strptime(period_match.group(1), "%d.%m.%Y").strftime("%Y-%m-%d")
         period_end = datetime.strptime(period_match.group(2), "%d.%m.%Y").strftime("%Y-%m-%d")
+        print(f"Период: {period_start} - {period_end}")
 
-        # --- 3. Находим строку с номерами колонок (строка 12 в вашем примере) ---
-        header_row_idx = None
-        for i in range(len(df)):
-            row = df.iloc[i].tolist()
-            # Считаем ячейки, начинающиеся с цифры (базовые номера)
-            num_count = sum(1 for cell in row if self._extract_base_number(cell) is not None)
-            if num_count >= 10:  # достаточно много номеров – это заголовок
-                header_row_idx = i
-                break
 
+       
+        # ====   чтобы видеть, на каком этапе возникает ошибка:
+        header_row_idx, num_to_idx = self._find_header_row_by_sequence(df)
         if header_row_idx is None:
-            raise ValueError("Не найдена строка с номерами колонок")
+            header_row_idx, num_to_idx = self._find_header_row_fallback(df, min_count=8)
+            if header_row_idx is None:
+                # Отладка – выводим первые 20 строк
+                for debug_i in range(min(20, len(df))):
+                    print(f"Строка {debug_i}: {df.iloc[debug_i].tolist()}")
+                raise ValueError("Не найдена строка с номерами колонок")
 
-        # Получаем словарь "базовый номер -> индекс колонки"
-        header_row = df.iloc[header_row_idx].tolist()
-        col_indices = self._find_column_indices(header_row)
+        print(f"Книга продаж: строка с номерами на индексе {header_row_idx}")
+        print(f"Соответствие номеров колонкам: {num_to_idx}")
 
-        # Проверяем наличие нужных базовых номеров
-        required_nums = [2, 3, 7, 10, 14, 17]  # код опер., счёт-фактура, покупатель, док. оплаты, сумма с НДС, НДС
+        required_nums = [2, 3, 7, 10, 14, 17]
         for num in required_nums:
-            if num not in col_indices:
+            if num not in num_to_idx:
                 raise ValueError(f"Не найден номер колонки {num}")
 
-        op_col = col_indices[2]
-        doc_col = col_indices[3]
-        buyer_col = col_indices[7]
-        payment_col = col_indices[10]
-        amount_col = col_indices[14]
-        vat_col = col_indices[17]
+        op_col = num_to_idx[2]
+        doc_col = num_to_idx[3]
+        buyer_col = num_to_idx[7]
+        payment_col = num_to_idx[10]
+        amount_col = num_to_idx[14]
+        vat_col = num_to_idx[17]
+
+        print(f"Колонки: операция={op_col}, документ={doc_col}, покупатель={buyer_col}, оплата={payment_col}, сумма={amount_col}, НДС={vat_col}")
 
         # --- 4. Сбор записей ---
         records = []
@@ -1835,26 +1925,26 @@ class MainWindow(QMainWindow):
             if not first_cell:
                 continue
 
-            # Проверяем на "Всего по покупателю" – сбрасываем покупателя и пропускаем
+            # "Всего по покупателю" – сброс покупателя
             if 'всего по покупателю' in first_cell:
                 current_buyer = None
                 continue
 
-            # Проверяем на финальное "Всего" – останавливаем сбор
+            # Финальное "Всего" – остановка
             if first_cell == 'всего' and 'по покупателю' not in first_cell:
+                print(f"Достигнута финальная строка 'Всего' на строке {i}")
                 break
 
             # Если первая ячейка – число (порядковый номер)
             if first_cell.replace('.', '', 1).replace(',', '').isdigit():
                 buyer = current_buyer
-                # Если в колонке покупателя что-то есть, используем его и обновляем current_buyer
                 if buyer_col < len(row) and row[buyer_col].strip():
                     buyer = row[buyer_col].strip()
                     current_buyer = buyer
                 elif not buyer:
-                    continue  # покупатель не определён – пропускаем
+                    continue
 
-                # Номер и дата счёта-фактуры (колонка 3)
+                # Номер и дата счёта-фактуры
                 doc_str = row[doc_col] if doc_col < len(row) else ''
                 doc_number = ''
                 doc_date = ''
@@ -1881,17 +1971,16 @@ class MainWindow(QMainWindow):
                     'period_end': period_end,
                     'doc_type': 'sales_book',
                     'product_group': 'Продажи',
-                    'seller': '',                     # не заполняем
+                    'seller': '',
                     'buyer': buyer,
                     'document_number': doc_number,
                     'document_date': doc_date,
                     'operation_code': operation_code,
-                    'payment_document': payment_doc,   # новое поле
-                    'sales_amount_without_vat': amount,  # здесь сумма с НДС
+                    'payment_document': payment_doc,
+                    'sales_amount_without_vat': amount,
                     'vat_to_budget': vat,
-                    # Остальные поля – нули / пусто
                     'nomenclature': '',
-                    'revenue': amount,                     # для совместимости
+                    'revenue': amount,
                     'vat_in_revenue': vat,
                     'cost_price': 0.0,
                     'gross_profit': 0.0,
@@ -1900,11 +1989,11 @@ class MainWindow(QMainWindow):
                     'net_profit': 0.0,
                     'vat_deductible': 0.0,
                     'purchase_amount_with_vat': 0.0,
-                    'acceptance_date': '',                 # для книги покупок
+                    'acceptance_date': '',
                     'quantity': 1
                 })
             else:
-                # Если первая ячейка не число – возможно, это название нового покупателя
+                # Если первая ячейка не число – возможно, название покупателя
                 if not first_cell[0].isdigit():
                     current_buyer = row[0].strip()
 
@@ -1915,7 +2004,7 @@ class MainWindow(QMainWindow):
         return pd.DataFrame(records)
 
     
-
+    #==========================================================================
     # ========== ОТЧЁТ ПО ПРОДАЖАМ (по товарам и месяцам) ==========
     def _parse_sales_report_detailed(self, file_path):
         df = pd.read_excel(file_path, header=None)
@@ -2407,12 +2496,51 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Ошибка tight_layout: {e}")
         self.canvas.draw()
-    
+
+    #==================================================================================
+    # """Экспорт данных в Excel с графиками"""
+
     def export_to_excel(self):
         """Экспорт данных в Excel с графиками"""
         if self.current_df is None or self.current_df.empty:
             QMessageBox.warning(self, "Предупреждение", "Нет данных для экспорта")
             return
+        
+        # Словарь для перевода английских названий колонок в русские
+        ru_headers = {
+            'id': 'ID',
+            'company': 'Компания',
+            'period_start': 'Период с',
+            'period_end': 'Период по',
+            'doc_type': 'Тип документа',
+            'product_group': 'Группа',
+            'seller': 'Продавец',
+            'buyer': 'Покупатель',
+            'nomenclature': 'Номенклатура',
+            'document_number': '№ сч/ф',
+            'document_date': 'Дата сч/ф',
+            'operation_code': 'Код опер.',
+            'acceptance_date': 'Дата принятия',
+            'payment_document': 'Платёжный документ',
+            'purchase_amount_with_vat': 'Сумма покупки с НДС',
+            'sales_amount_without_vat': 'Сумма продажи без НДС',
+            'revenue': 'Выручка',
+            'vat_in_revenue': 'НДС в выручке',
+            'cost_price': 'Себестоимость',
+            'gross_profit': 'Валовая прибыль',
+            'sales_expenses': 'Расходы на продажу',
+            'other_income_expenses': 'Прочие доходы/расходы',
+            'net_profit': 'Чистая прибыль',
+            'vat_deductible': 'НДС к вычету',
+            'vat_to_budget': 'НДС к уплате',
+            'quantity': 'Кол-во',
+            'import_date': 'Дата импорта'
+        }
+
+        # Создаём копию df для экспорта с русскими заголовками
+        df_export = self.current_df.copy()
+        df_export.rename(columns=ru_headers, inplace=True)
+
         
         file_path, _ = QFileDialog.getSaveFileName(
             self, "Сохранить как Excel", "отчет_buh_tuund.xlsx", "Excel Files (*.xlsx)"
@@ -2471,6 +2599,9 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Ошибка при экспорте: {str(e)}")
     
+    #==========================================================================
+    # """Экспорт отчета в PDF с поддержкой кириллицы"""
+
     def export_to_pdf(self):
         """Экспорт отчета в PDF с поддержкой кириллицы"""
         if self.current_df is None or self.current_df.empty:
@@ -2724,7 +2855,7 @@ class MainWindow(QMainWindow):
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v5.13.0</p>
+        <p><b>Версия программы:</b> v5.13.1</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
