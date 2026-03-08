@@ -1,5 +1,5 @@
 #=====================================================
-# Buh_Tuund v6.0.0 Книга покупок и продаж работает! 
+# Buh_Tuund v7.0.0 Новые меню и отчеты
 
 import sys
 import os
@@ -49,7 +49,6 @@ class DatabaseManager:
                 product_group TEXT,
                 nomenclature TEXT,
                 revenue REAL,
-                vat_in_revenue REAL,
                 cost_price REAL,
                 gross_profit REAL,
                 sales_expenses REAL,
@@ -113,7 +112,6 @@ class DatabaseManager:
             'product_group': '',
             'nomenclature': '',
             'revenue': 0.0,
-            'vat_in_revenue': 0.0,
             'cost_price': 0.0,
             'gross_profit': 0.0,
             'sales_expenses': 0.0,
@@ -141,7 +139,7 @@ class DatabaseManager:
 
         # Список числовых колонок (REAL)
         numeric_cols = [
-            'revenue', 'vat_in_revenue', 'cost_price', 'gross_profit',
+            'revenue', 'cost_price', 'gross_profit',
             'sales_expenses', 'other_income_expenses', 'net_profit',
             'vat_deductible', 'vat_to_budget', 'purchase_amount_with_vat',
             'sales_amount_without_vat','sales_amount_with_vat'
@@ -252,9 +250,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.db = DatabaseManager()
         self.current_df = None
+        self.settings = QSettings("DeerTuund", "BuhTuundOtchet")  # для сохранения настроек
+        self.load_settings()
         self.init_ui()
-        self.settings = QSettings("Компания", "BuhTuund")
-        self._load_saved_paths()
+        self.load_last_database()  # загружаем последнюю БД при старте
     
     def init_ui(self):
         self.setWindowTitle("BuhTuundOtchet")
@@ -352,9 +351,26 @@ class MainWindow(QMainWindow):
             }
         """)
         filter_layout.addWidget(self.apply_filter_btn)
-        
         filter_layout.addStretch()
         main_layout.addLayout(filter_layout)
+
+        self.process_selected_btn = QPushButton("ОБРАБОТАТЬ!")
+        self.process_selected_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ff4444;
+                color: white;
+                font-weight: bold;
+                font-size: 14px;
+                padding: 8px 20px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #ff6666;
+            }
+        """)
+        filter_layout.addWidget(self.process_selected_btn)
+        filter_layout.addStretch()
+
 
         # ==============================  боковая панель =====================================
         # Создаём QSplitter для разделения на панели
@@ -440,23 +456,33 @@ class MainWindow(QMainWindow):
             "Период", "Компания", "Товарная группа", "Номенклатура",
             "Выручка (с НДС)", "НДС в выручке", "Себестоимость",
             "Валовая прибыль", "Расходы на продажу", "Прочие доходы/расходы",
-            "Чистая прибыль", "НДС к вычету", "НДС К УПЛАТЕ", "Оборот (кол-во)"
+            "Чистая прибыль", "НДС покупки", "НДС продажи", "Оборот (кол-во)"
         ]
         self.table_model.setHorizontalHeaderLabels(headers)
         
         table_layout.addWidget(self.table_view)
         
         # Панель итогов под таблицей
+        
         summary_layout = QHBoxLayout()
-        
-        self.total_label = QLabel("Итого по фильтру:")
-        self.total_label.setStyleSheet("font-size: 12pt; font-weight: bold; color: #2c3e50;")
-        
-        self.revenue_label = QLabel("Выручка: 0 ₽")
-        self.vat_label = QLabel("НДС к уплате: 0 ₽")
-        self.profit_label = QLabel("Чистая прибыль: 0 ₽")
-        
-        for label in [self.revenue_label, self.vat_label, self.profit_label]:
+        self.revenue_with_vat_label = QLabel("Выручка с НДС: 0 ₽")
+        self.revenue_without_vat_label = QLabel("Выручка без НДС: 0 ₽")
+        self.expenses_with_vat_label = QLabel("Затраты с НДС: 0 ₽")
+        self.expenses_without_vat_label = QLabel("Затраты без НДС: 0 ₽")
+        self.gross_profit_with_vat_label = QLabel("Валовая прибыль: 0 ₽")
+        self.profit_without_vat_label = QLabel("Прибыль без НДС: 0 ₽")
+        self.profit_margin_label = QLabel("Норма прибыли: 0%")
+        self.vat_sales_label = QLabel("НДС продажи: 0 ₽")
+        self.vat_purchases_label = QLabel("НДС покупки: 0 ₽")
+        self.vat_to_budget_net_label = QLabel("НДС в бюджет: 0 ₽")
+        self.profit_tax_label = QLabel("Налог на прибыль: 0 ₽")
+
+        # Примените стиль ко всем меткам (можно циклом)
+        for label in [self.revenue_with_vat_label, self.revenue_without_vat_label,
+                    self.expenses_with_vat_label, self.expenses_without_vat_label,
+                    self.gross_profit_with_vat_label, self.profit_without_vat_label,
+                    self.profit_margin_label, self.vat_sales_label,
+                    self.vat_purchases_label, self.vat_to_budget_net_label], self.profit_tax_label:
             label.setStyleSheet("""
                 QLabel {
                     background-color: #ecf0f1;
@@ -467,13 +493,19 @@ class MainWindow(QMainWindow):
                     border: 1px solid #bdc3c7;
                 }
             """)
-        
-        summary_layout.addWidget(self.total_label)
-        summary_layout.addWidget(self.revenue_label)
-        summary_layout.addWidget(self.vat_label)
-        summary_layout.addWidget(self.profit_label)
+
+        # Добавляем все метки в layout
+        summary_layout.addWidget(self.revenue_with_vat_label)
+        summary_layout.addWidget(self.revenue_without_vat_label)
+        summary_layout.addWidget(self.expenses_with_vat_label)
+        summary_layout.addWidget(self.expenses_without_vat_label)
+        summary_layout.addWidget(self.gross_profit_with_vat_label)
+        summary_layout.addWidget(self.profit_without_vat_label)
+        summary_layout.addWidget(self.profit_margin_label)
+        summary_layout.addWidget(self.vat_sales_label)
+        summary_layout.addWidget(self.vat_purchases_label)
+        summary_layout.addWidget(self.vat_to_budget_net_label)
         summary_layout.addStretch()
-        
         table_layout.addLayout(summary_layout)
         
         # Вкладка с графиками
@@ -504,14 +536,16 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.tab_widget)
         
         # Загрузка начальных данных
-        #self.load_initial_data()
+        
         self.current_df = pd.DataFrame()
         self.display_data(self.current_df)
-        self.update_totals()
+        self.update_summary()
         self.update_charts()
         # Обновляем фильтры (они будут содержать только "Все")
         self.update_filter_combos()
 
+    #=================================================================
+    # Универсальная обработка перед сохранением:
     def _finalize_and_save(self, data_rows):
         """
         Универсальная обработка перед сохранением:
@@ -519,7 +553,6 @@ class MainWindow(QMainWindow):
         - автоматический пересчёт прибыли
         - защита от NaN
         """
-
         if not data_rows:
             return 0
 
@@ -527,34 +560,43 @@ class MainWindow(QMainWindow):
 
         # Обязательные колонки (если отсутствуют — создаём)
         required_columns = [
-            'company', 'period', 'counterparty', 'document_number',
-            'operation_type', 'quantity',
-            'revenue', 'vat_in_revenue', 'cost_price',
-            'gross_profit', 'sales_expenses',
+            'company', 'period_start', 'period_end', 'doc_type', 'product_group',
+            'seller', 'buyer', 'nomenclature', 'document_number', 'document_date',
+            'operation_code', 'acceptance_date', 'payment_document',
+            'revenue', 'cost_price', 'gross_profit', 'sales_expenses',
             'other_income_expenses', 'net_profit',
-            'vat_deductible', 'vat_to_budget'
+            'vat_deductible', 'vat_to_budget',
+            'purchase_amount_with_vat', 'sales_amount_with_vat', 'sales_amount_without_vat',
+            'quantity'
         ]
 
         for col in required_columns:
             if col not in df.columns:
-                df[col] = 0 if col != 'counterparty' and col != 'document_number' and col != 'operation_type' else ""
+                if col in ['revenue', 'cost_price', 'gross_profit', 'sales_expenses',
+                        'other_income_expenses', 'net_profit', 'vat_deductible',
+                        'vat_to_budget', 'purchase_amount_with_vat',
+                        'sales_amount_with_vat', 'sales_amount_without_vat', 'quantity']:
+                    df[col] = 0
+                else:
+                    df[col] = ""
 
         # Количество
         df['quantity'] = pd.to_numeric(df['quantity'], errors='coerce').fillna(0).astype(int)
 
         # Числовые поля
         numeric_cols = [
-            'revenue','vat_in_revenue','cost_price',
-            'sales_expenses','other_income_expenses',
-            'vat_deductible','vat_to_budget'
+            'revenue', 'cost_price', 'sales_expenses', 'other_income_expenses',
+            'vat_deductible', 'vat_to_budget', 'purchase_amount_with_vat',
+            'sales_amount_with_vat', 'sales_amount_without_vat'
         ]
 
         for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-        # 🔥 Автоматический пересчёт прибыли
-        df['gross_profit'] = df['revenue'] - df['vat_in_revenue'] - df['cost_price']
-
+        # 🔥 Автоматический пересчёт прибыли (теперь без vat_in_revenue)
+        df['gross_profit'] = df['revenue'] - df['cost_price']
+        
         df['net_profit'] = (
             df['gross_profit']
             - df['sales_expenses']
@@ -563,6 +605,8 @@ class MainWindow(QMainWindow):
 
         return self.db.save_data(df)
     
+    #===================================================================
+    # Сохранение значенй с плавающей точкой
     def _safe_float(self, value):
         try:
             if isinstance(value, str):
@@ -658,29 +702,98 @@ class MainWindow(QMainWindow):
             self.get_checked_files(item.child(i), files)
     
     # =================================================================================
-    #  Импорт данных из шаблонного Excel-файла (старый формат сводного отчёта)
+    #  """Импорт данных из Excel/CSV файла с сопоставлением колонок"""
 
     def import_from_template(self):
-        """Импорт данных из шаблонного Excel-файла (старый формат сводного отчёта)"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, 
-            "Выберите файл шаблона", 
-            "", 
-            "Excel Files (*.xlsx)"
-        )
-        if not file_path:
-            return
-        try:
-            records_count = self._import_legacy(file_path)
-            # Обновляем отображение
-            self.current_df = self.db.get_all_data()
-            self.display_data(self.current_df)
-            self.update_totals()
-            self.update_charts()
-            self.update_filter_combos()
-            QMessageBox.information(self, "Успех", f"Импортировано {records_count} записей")
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось импортировать файл:\n{str(e)}")
+            """Импорт данных из Excel/CSV файла с сопоставлением колонок"""
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Выберите файл для импорта",
+                self.load_folder,
+                "Excel/CSV Files (*.xlsx *.xls *.csv)"
+            )
+            if not file_path:
+                return
+        
+            try:
+                # Определяем тип файла
+                if file_path.endswith('.csv'):
+                    df = pd.read_csv(file_path, encoding='utf-8-sig')
+                else:
+                    df = pd.read_excel(file_path)
+                
+                # Диалог сопоставления колонок
+                if self._map_columns_and_import(df):
+                    QMessageBox.information(self, "Успех", "Данные импортированы")
+                    self.current_df = self.db.get_all_data()
+                    self.display_data(self.current_df)
+                    self.update_summary()
+                    self.update_charts()
+                    self.update_filter_combos()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось импортировать файл:\n{str(e)}")
+    #=============================================================
+    # """Диалог сопоставления колонок и импорт"""
+    def _map_columns_and_import(self, df):
+        """Диалог сопоставления колонок и импорт"""
+        # Получаем список колонок в базе
+        cursor = self.db.conn.execute("PRAGMA table_info(reports)")
+        db_columns = [col[1] for col in cursor.fetchall() if col[1] not in ['id', 'import_date']]
+        
+        # Создаём диалог
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Сопоставление колонок")
+        dialog.setMinimumWidth(600)
+        layout = QVBoxLayout(dialog)
+        
+        layout.addWidget(QLabel("Сопоставьте колонки из файла с полями базы данных:"))
+        
+        # Таблица сопоставления
+        mapping_table = QTableWidget(len(df.columns), 2)
+        mapping_table.setHorizontalHeaderLabels(["Колонка в файле", "Поле в БД"])
+        
+        combo_boxes = []
+        for i, col in enumerate(df.columns):
+            mapping_table.setItem(i, 0, QTableWidgetItem(str(col)))
+            combo = QComboBox()
+            combo.addItems(db_columns)
+            combo_boxes.append(combo)
+            mapping_table.setCellWidget(i, 1, combo)
+        
+        layout.addWidget(mapping_table)
+        
+        # Кнопки
+        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btn_box.accepted.connect(dialog.accept)
+        btn_box.rejected.connect(dialog.reject)
+        layout.addWidget(btn_box)
+        
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        
+        # Создаём словарь сопоставления
+        mapping = {}
+        for i, combo in enumerate(combo_boxes):
+            target_col = combo.currentText()
+            if target_col:
+                mapping[df.columns[i]] = target_col
+        
+        if not mapping:
+            QMessageBox.warning(self, "Предупреждение", "Не выбрано ни одного сопоставления")
+            return False
+        
+        # Переименовываем колонки и сохраняем
+        df_import = df.rename(columns=mapping)
+        # Оставляем только те колонки, которые есть в БД
+        df_import = df_import[[col for col in mapping.values() if col in db_columns]]
+        
+        # Добавляем недостающие колонки со значениями по умолчанию
+        for col in db_columns:
+            if col not in df_import.columns:
+                df_import[col] = '' if 'date' in col or 'name' in col else 0
+        
+        self.db.save_data(df_import)
+        return True
 
     def process_selected_files(self):
         """Собирает отмеченные файлы и запускает их обработку."""
@@ -805,7 +918,7 @@ class MainWindow(QMainWindow):
                 'Период', 'Компания', 'Товарная группа', 'Номенклатура',
                 'Выручка (с НДС)', 'НДС в выручке', 'Себестоимость',
                 'Валовая прибыль', 'Расходы на продажу', 'Прочие доходы/расходы',
-                'Чистая прибыль', 'НДС к вычету', 'НДС К УПЛАТЕ', 'Оборот (кол-во)'
+                'Чистая прибыль', 'НДС покупки', 'НДС продажи', 'Оборот (кол-во)'
             ]
             df_template = pd.DataFrame(columns=columns_ru)
 
@@ -822,8 +935,8 @@ class MainWindow(QMainWindow):
                 'Расходы на продажу': 50000,
                 'Прочие доходы/расходы': 0,
                 'Чистая прибыль': 350000,
-                'НДС к вычету': 90000,
-                'НДС К УПЛАТЕ': 110000,
+                'НДС покупки': 90000,
+                'НДС продажи': 110000,
                 'Оборот (кол-во)': 100
             }
             df_template = pd.concat([df_template, pd.DataFrame([example_row])], ignore_index=True)
@@ -838,85 +951,71 @@ class MainWindow(QMainWindow):
     # =================================================================================================
     # Обновлённый тулбар (убираем старые кнопки)
     def create_toolbar(self):
-        toolbar = QToolBar("Главная панель")
-        toolbar.setMovable(False)
-        toolbar.setIconSize(QSize(24, 24))
-        self.addToolBar(toolbar)
-
-        # Кнопки управления БД
-        load_db_action = QAction("📂 Загрузить БД", self)
-        load_db_action.triggered.connect(self.load_database)
-        toolbar.addAction(load_db_action)
-
-        save_db_action = QAction("💾 Сохранить БД", self)
-        save_db_action.triggered.connect(self.save_database)
-        toolbar.addAction(save_db_action)
-
-        save_as_action = QAction("📁 Сохранить БД как...", self)
-        save_as_action.triggered.connect(self.save_database_as)
-        toolbar.addAction(save_as_action)
-
-        clear_db_action = QAction("🗑️ Очистить БД", self)
-        clear_db_action.triggered.connect(self.clear_database)
-        toolbar.addAction(clear_db_action)
-
-        import_template_action = QAction("📥 Импорт из шаблона", self)
-        import_template_action.triggered.connect(self.import_from_template)
-        toolbar.addAction(import_template_action)
-
-        toolbar.addSeparator()
+        menubar = self.menuBar()
         
-        # Кнопка экспорта в Excel
-        export_excel_action = QAction("📊 Экспорт в Excel", self)
-        export_excel_action.triggered.connect(self.export_to_excel)
-        toolbar.addAction(export_excel_action)
-
-        # Кнопка экспорта в PDF
-        export_pdf_action = QAction("📄 Экспорт в PDF", self)
-        export_pdf_action.triggered.connect(self.export_to_pdf)
-        toolbar.addAction(export_pdf_action)
-
-        # Кнопка экспорта в Word
-        export_word_action = QAction("📝 Экспорт в Word", self)
-        export_word_action.triggered.connect(self.export_to_word)
-        toolbar.addAction(export_word_action)
-
-        toolbar.addSeparator()
-
-        # Кнопка быстрого отчета
-        report_action = QAction("📋 Быстрый отчет", self)
-        report_action.triggered.connect(self.generate_quick_report)
-        toolbar.addAction(report_action)
-
-        toolbar.addSeparator()
-
-        # Кнопка настроек
-        settings_action = QAction("⚙️ Настройки", self)
-        settings_action.triggered.connect(self.show_settings)
-        toolbar.addAction(settings_action)
-
-        # Кнопка "О программе"
-        about_action = QAction("ℹ️ О программе", self)
-        about_action.triggered.connect(self.show_about)
-        toolbar.addAction(about_action)
+        # Меню "База данных"
+        db_menu = menubar.addMenu("База данных")
+        
+        load_db_action = QAction("Загрузить БД", self)
+        load_db_action.triggered.connect(self.load_database)
+        db_menu.addAction(load_db_action)
+        
+        save_db_action = QAction("Сохранить БД", self)
+        save_db_action.triggered.connect(self.save_database)
+        db_menu.addAction(save_db_action)
+        
+        save_as_action = QAction("Сохранить БД как...", self)
+        save_as_action.triggered.connect(self.save_database_as)
+        db_menu.addAction(save_as_action)
+        
+        clear_db_action = QAction("Очистить БД", self)
+        clear_db_action.triggered.connect(self.clear_database)
+        db_menu.addAction(clear_db_action)
+        
+        export_db_action = QAction("Экспорт БД в Excel", self)
+        export_db_action.triggered.connect(self.export_to_excel)
+        db_menu.addAction(export_db_action)
+        
+        # Меню "Отчеты"
+        report_menu = menubar.addMenu("Отчеты")
+        
+        quick_report_action = QAction("Быстрый отчет", self)
+        quick_report_action.triggered.connect(self.generate_quick_report)
+        report_menu.addAction(quick_report_action)
+        
+        report_menu.addSeparator()
+        
+        pdf_action = QAction("Экспорт в PDF", self)
+        pdf_action.triggered.connect(self.export_to_pdf)
+        report_menu.addAction(pdf_action)
+        
+        word_action = QAction("Экспорт в Word", self)
+        word_action.triggered.connect(self.export_to_word)
+        report_menu.addAction(word_action)
+        
+        # Вкладки можно оставить как есть или тоже добавить в меню
+        
+        # Остальные кнопки (настройки, о программе)
+        toolbar = QToolBar()
+        self.addToolBar(toolbar)
+        toolbar.addAction(QAction("⚙️ Настройки", self, triggered=self.show_settings))
+        toolbar.addAction(QAction("ℹ️ О программе", self, triggered=self.show_about))
 
     # ================================================
     # очистка БД
 
     def clear_database(self):
-        reply = QMessageBox.question(
-            self,
-            "Подтверждение",
-            "Вы действительно хотите удалить все данные из текущей базы?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
+        reply = QMessageBox.question(self, "Подтверждение", 
+                                    "Вы действительно хотите удалить все данные из базы?",
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
             cursor = self.db.conn.cursor()
             cursor.execute("DELETE FROM reports")
+            cursor.execute("DELETE FROM sqlite_sequence WHERE name='reports'")  # сброс автоинкремента
             self.db.conn.commit()
             self.current_df = pd.DataFrame()
             self.display_data(self.current_df)
-            self.update_totals()
+            self.update_summary()
             self.update_charts()
             self.update_filter_combos()
             QMessageBox.information(self, "Готово", "База данных очищена")
@@ -924,46 +1023,67 @@ class MainWindow(QMainWindow):
     # ================================================
     # Загрузка БД
     def load_database(self):
+        """Загружает базу данных из выбранного файла .db."""
+        start_dir = self.db_load_folder if self.db_load_folder else ""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Выберите файл базы данных",
-            "",
+            start_dir,
             "SQLite DB (*.db)"
         )
         if not file_path:
             return
 
         try:
-            # Закрываем текущее соединение
             self.db.conn.close()
-            # Создаём новый экземпляр DatabaseManager с выбранным файлом
             self.db = DatabaseManager(db_path=file_path)
-            # Загружаем данные
             self.current_df = self.db.get_all_data()
             self.display_data(self.current_df)
-            self.update_totals()
+            self.update_summary()
             self.update_charts()
             self.update_filter_combos()
+            # Сохраняем путь как последнюю БД
+            self.settings.setValue("last_database", file_path)
             QMessageBox.information(self, "Успех", f"База данных загружена из {file_path}")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить базу данных:\n{str(e)}")
     
     
     # ================================================
+    # """Загружает последнюю использованную базу данных при старте"""
+    def load_last_database(self):
+        """Загружает последнюю использованную базу данных при старте"""
+        last_db = self.settings.value("last_database", "")
+        if last_db and os.path.exists(last_db):
+            try:
+                self.db.conn.close()
+                self.db = DatabaseManager(db_path=last_db)
+                self.current_df = self.db.get_all_data()
+                self.display_data(self.current_df)
+                self.update_summary()
+                self.update_charts()
+                self.update_filter_combos()
+                print(f"Загружена последняя БД: {last_db}")
+            except Exception as e:
+                print(f"Не удалось загрузить последнюю БД: {e}")
+
+    # ================================================
     # Сохранить  БД как
     def save_database_as(self):
-        # Получаем путь к текущему файлу БД
+        """Сохраняет копию текущего файла базы данных в указанное место."""
         cursor = self.db.conn.execute("PRAGMA database_list")
-        row = cursor.fetchone()  # (seq, name, file)
+        row = cursor.fetchone()
         if row is None or not row[2]:
             QMessageBox.warning(self, "Предупреждение", "Не удалось определить путь к текущей базе данных")
             return
         current_db_path = row[2]
 
+        # Предлагаем папку из настроек
+        start_dir = self.db_save_folder if self.db_save_folder else ""
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Сохранить базу данных как",
-            "",
+            os.path.join(start_dir, "database.db"),
             "SQLite DB (*.db)"
         )
         if not file_path:
@@ -972,57 +1092,115 @@ class MainWindow(QMainWindow):
         try:
             import shutil
             shutil.copy2(current_db_path, file_path)
+            # Сохраняем путь как последнюю БД
+            self.settings.setValue("last_database", file_path)
             QMessageBox.information(self, "Успех", f"База данных сохранена как {file_path}")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить базу данных:\n{str(e)}")
     
     # ================================================
     # Сохранить  БД
-    
     def save_database(self):
         # commit уже происходит при каждом изменении, но можно просто уведомить
         QMessageBox.information(self, "Сохранение", "Все изменения уже сохранены в текущей базе данных.")
 
+
+
+
+    # ================================================
+    # """Загружает сохранённые пути из настроек"""
+    def load_settings(self):
+        """Загружает сохранённые пути из настроек"""
+        self.load_folder = self.settings.value("load_folder", "")
+        self.save_folder = self.settings.value("save_folder", "")
+        self.db_load_folder = self.settings.value("db_load_folder", "")
+        self.db_save_folder = self.settings.value("db_save_folder", "")
+
+    # ================================================
+    # """Сохраняет текущие пути в настройки"""
+    def save_settings(self):
+        """Сохраняет текущие пути в настройки"""
+        self.settings.setValue("load_folder", self.load_folder)
+        self.settings.setValue("save_folder", self.save_folder)
+        self.settings.setValue("db_load_folder", self.db_load_folder)
+        self.settings.setValue("db_save_folder", self.db_save_folder)
+
     # =======================================================================
     # Меню настроек
     def show_settings(self):
+        """Диалог настроек"""
         dialog = QDialog(self)
         dialog.setWindowTitle("Настройки")
         dialog.setModal(True)
         layout = QVBoxLayout(dialog)
 
-        # Папка для загрузки
+        # Папка загрузки данных (книги, ОСВ)
         load_layout = QHBoxLayout()
-        load_layout.addWidget(QLabel("Папка для загрузки:"))
-        self.load_folder_edit = QLineEdit()
+        load_layout.addWidget(QLabel("Папка загрузки данных:"))
+        self.load_folder_edit = QLineEdit(self.load_folder)
         load_layout.addWidget(self.load_folder_edit)
         load_btn = QPushButton("Обзор...")
-        load_btn.clicked.connect(lambda: self._choose_folder(self.load_folder_edit))
+        load_btn.clicked.connect(lambda: self._choose_folder(self.load_folder_edit, "load_folder"))
         load_layout.addWidget(load_btn)
         layout.addLayout(load_layout)
 
-        # Папка для выгрузки
-        export_layout = QHBoxLayout()
-        export_layout.addWidget(QLabel("Папка для выгрузки:"))
-        self.export_folder_edit = QLineEdit()
-        export_layout.addWidget(self.export_folder_edit)
-        export_btn = QPushButton("Обзор...")
-        export_btn.clicked.connect(lambda: self._choose_folder(self.export_folder_edit))
-        export_layout.addWidget(export_btn)
-        layout.addLayout(export_layout)
+        # Папка сохранения отчётов (PDF, Word, Excel)
+        save_layout = QHBoxLayout()
+        save_layout.addWidget(QLabel("Папка сохранения отчётов:"))
+        self.save_folder_edit = QLineEdit(self.save_folder)
+        save_layout.addWidget(self.save_folder_edit)
+        save_btn = QPushButton("Обзор...")
+        save_btn.clicked.connect(lambda: self._choose_folder(self.save_folder_edit, "save_folder"))
+        save_layout.addWidget(save_btn)
+        layout.addLayout(save_layout)
+
+        # Папка загрузки БД
+        db_load_layout = QHBoxLayout()
+        db_load_layout.addWidget(QLabel("Папка загрузки БД:"))
+        self.db_load_folder_edit = QLineEdit(self.db_load_folder)
+        db_load_layout.addWidget(self.db_load_folder_edit)
+        db_load_btn = QPushButton("Обзор...")
+        db_load_btn.clicked.connect(lambda: self._choose_folder(self.db_load_folder_edit, "db_load_folder"))
+        db_load_layout.addWidget(db_load_btn)
+        layout.addLayout(db_load_layout)
+
+        # Папка сохранения БД
+        db_save_layout = QHBoxLayout()
+        db_save_layout.addWidget(QLabel("Папка сохранения БД:"))
+        self.db_save_folder_edit = QLineEdit(self.db_save_folder)
+        db_save_layout.addWidget(self.db_save_folder_edit)
+        db_save_btn = QPushButton("Обзор...")
+        db_save_btn.clicked.connect(lambda: self._choose_folder(self.db_save_folder_edit, "db_save_folder"))
+        db_save_layout.addWidget(db_save_btn)
+        layout.addLayout(db_save_layout)
 
         # Кнопки ОК/Отмена
         btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        btn_box.accepted.connect(dialog.accept)
+        btn_box.accepted.connect(lambda: self._save_settings_from_dialog(dialog))
         btn_box.rejected.connect(dialog.reject)
         layout.addWidget(btn_box)
 
         dialog.exec()
 
+    #========================================================================
+    # """Выбирает папку и обновляет поле ввода"""
     def _choose_folder(self, line_edit):
+        """Выбирает папку и обновляет поле ввода"""
         folder = QFileDialog.getExistingDirectory(self, "Выберите папку")
         if folder:
             line_edit.setText(folder)
+            setattr(self, setting_key, folder)
+
+    #========================================================================
+    # """Сохраняет настройки из диалога"""
+    def _save_settings_from_dialog(self, dialog):
+        """Сохраняет настройки из диалога"""
+        self.load_folder = self.load_folder_edit.text()
+        self.save_folder = self.save_folder_edit.text()
+        self.db_load_folder = self.db_load_folder_edit.text()
+        self.db_save_folder = self.db_save_folder_edit.text()
+        self.save_settings()
+        dialog.accept()
 
     def load_files(self):
         file_paths, _ = QFileDialog.getOpenFileNames(
@@ -1081,7 +1259,7 @@ class MainWindow(QMainWindow):
             if success_count > 0:
                 self.current_df = self.db.get_all_data()
                 self.display_data(self.current_df)
-                self.update_totals()
+                self.update_summary()
                 self.update_charts()
                 self.update_filter_combos()
                 print(f"Загружено записей из БД: {len(self.current_df)}")
@@ -1095,7 +1273,7 @@ class MainWindow(QMainWindow):
         if success_count > 0:
             self.current_df = self.db.get_all_data()
             # Принудительное преобразование всех числовых колонок
-            num_cols = ['revenue','vat_in_revenue','cost_price','gross_profit','sales_expenses',
+            num_cols = ['revenue','cost_price','gross_profit','sales_expenses',
                 'other_income_expenses','net_profit','vat_deductible','vat_to_budget','quantity']
             for col in num_cols:
                 if col in self.current_df.columns:
@@ -1106,7 +1284,7 @@ class MainWindow(QMainWindow):
             print(f"Загружено записей из БД: {len(self.current_df)}")
             self.display_data(self.current_df)
             self.update_filter_combos()
-            self.update_totals()
+            self.update_summary()
             # Защита от NaN в графиках
             try:
                 self.update_charts()
@@ -1214,7 +1392,7 @@ class MainWindow(QMainWindow):
                 return num
         return '01'
     
-    # Главная цифра НДС к уплате
+    # Главная цифра НДС продажи
     def get_vat_summary(self, date_from=None, date_to=None, company=None):
 
         query = """
@@ -1390,7 +1568,7 @@ class MainWindow(QMainWindow):
     
     #======================================================================================================================
     # Расчет НДС за период
-    # НДС к уплате = Σ НДС начисленный (продажи) – Σ НДС к вычету (покупки)
+    # НДС продажи = Σ НДС начисленный (продажи) – Σ НДС к вычету (покупки)
 
     def calculate_vat_for_period(self, company, period):
 
@@ -1874,7 +2052,6 @@ class MainWindow(QMainWindow):
                     'vat_deductible': vat,
                     'nomenclature': '',
                     'revenue': 0.0,
-                    'vat_in_revenue': 0.0,
                     'cost_price': 0.0,
                     'gross_profit': 0.0,
                     'sales_expenses': 0.0,
@@ -2059,7 +2236,6 @@ class MainWindow(QMainWindow):
                     'vat_to_budget': vat,
                     'nomenclature': '',
                     'revenue': amount_without_vat,  # для совместимости
-                    'vat_in_revenue': vat,
                     'cost_price': 0.0,
                     'gross_profit': 0.0,
                     'sales_expenses': 0.0,
@@ -2172,7 +2348,6 @@ class MainWindow(QMainWindow):
                     'product_group': 'Товары',
                     'nomenclature': nomenclature,
                     'revenue': amount,
-                    'vat_in_revenue': vat,
                     'cost_price': 0,
                     'gross_profit': 0,
                     'sales_expenses': 0,
@@ -2187,7 +2362,7 @@ class MainWindow(QMainWindow):
             return 0
         df_result = pd.DataFrame(data_rows)
         df_result['quantity'] = df_result['quantity'].astype(int)
-        numeric_cols = ['revenue','vat_in_revenue','cost_price','gross_profit','sales_expenses','other_income_expenses','net_profit','vat_deductible','vat_to_budget']
+        numeric_cols = ['revenue','cost_price','gross_profit','sales_expenses','other_income_expenses','net_profit','vat_deductible','vat_to_budget']
         for col in numeric_cols:
             if col in df_result.columns:
                 df_result[col] = pd.to_numeric(df_result[col], errors='coerce').fillna(0)
@@ -2244,26 +2419,23 @@ class MainWindow(QMainWindow):
             'Номенклатура': 'nomenclature',
             'Выручка (с НДС)': 'revenue',
             'Выручка': 'revenue',
-            'НДС в выручке': 'vat_in_revenue',
             'Себестоимость': 'cost_price',
             'Валовая прибыль': 'gross_profit',
             'Расходы на продажу': 'sales_expenses',
             'Прочие доходы/расходы': 'other_income_expenses',
             'Чистая прибыль': 'net_profit',
-            'НДС к вычету': 'vat_deductible',
-            'НДС К УПЛАТЕ': 'vat_to_budget',
-            'НДС к уплате': 'vat_to_budget',
+            'НДС покупки': 'vat_deductible',
+            'НДС продажи': 'vat_to_budget',
             'Оборот (кол-во)': 'quantity',
             'Количество': 'quantity'
         }
         df.rename(columns=lambda x: column_mapping.get(str(x).strip(), str(x).strip()), inplace=True)
         required = ['period', 'company', 'product_group', 'nomenclature', 'revenue',
-                    'vat_in_revenue', 'cost_price', 'vat_to_budget', 'quantity']
+                    'cost_price', 'vat_to_budget', 'quantity']
         missing = [c for c in required if c not in df.columns]
         if missing:
             ru_names = {'period':'Период','company':'Компания','product_group':'Товарная группа',
-                        'nomenclature':'Номенклатура','revenue':'Выручка (с НДС)','vat_in_revenue':'НДС в выручке',
-                        'cost_price':'Себестоимость','vat_to_budget':'НДС к уплате','quantity':'Количество'}
+                        'nomenclature':'Номенклатура','revenue':'Выручка (с НДС)','cost_price':'Себестоимость','vat_to_budget':'НДС продажи','quantity':'Количество'}
             missing_ru = [ru_names.get(c,c) for c in missing]
             raise ValueError(
                 f"Файл не является сводным отчётом.\n"
@@ -2271,7 +2443,7 @@ class MainWindow(QMainWindow):
                 "Используйте кнопку «Скачать шаблон» для подготовки данных."
             )
         if 'gross_profit' not in df.columns:
-            df['gross_profit'] = df['revenue'] - df['vat_in_revenue'] - df['cost_price']
+            df['gross_profit'] = df['revenue'] - df['vat_to_budget'] - df['cost_price']
         if 'net_profit' not in df.columns:
             df['net_profit'] = df['gross_profit']
             if 'sales_expenses' in df.columns:
@@ -2291,9 +2463,8 @@ class MainWindow(QMainWindow):
             'product_group': 'Товарная группа',
             'nomenclature': 'Номенклатура',
             'revenue': 'Выручка (с НДС)',
-            'vat_in_revenue': 'НДС в выручке',
             'cost_price': 'Себестоимость',
-            'vat_to_budget': 'НДС к уплате',
+            'vat_to_budget': 'НДС продажи',
             'quantity': 'Количество'
         }
         return ru_names.get(eng_name, eng_name)
@@ -2317,7 +2488,7 @@ class MainWindow(QMainWindow):
             self.current_df = self.db.get_all_data()  # или применить текущие фильтры
             self.display_data(self.current_df)
             self.update_filter_combos()
-            self.update_totals()
+            self.update_summary()
             self.update_charts()
             QMessageBox.information(
                 self, "Успех",
@@ -2342,7 +2513,7 @@ class MainWindow(QMainWindow):
             'seller', 'buyer', 'nomenclature',
             'document_number', 'document_date', 'operation_code', 'acceptance_date', 'payment_document',
             'purchase_amount_with_vat', 'sales_amount_without_vat', 'sales_amount_with_vat', 
-            'revenue', 'vat_in_revenue', 'cost_price', 'gross_profit', 'sales_expenses',
+            'revenue', 'cost_price', 'gross_profit', 'sales_expenses',
             'other_income_expenses', 'net_profit', 'vat_deductible', 'vat_to_budget', 'quantity',
             'import_date'
         ]
@@ -2367,14 +2538,13 @@ class MainWindow(QMainWindow):
             'sales_amount_without_vat': 'Сумма продажи без НДС',
             'sales_amount_with_vat': 'Сумма продажи с НДС',
             'revenue': 'Выручка',
-            'vat_in_revenue': 'НДС в выручке',
             'cost_price': 'Себестоимость',
             'gross_profit': 'Валовая прибыль',
             'sales_expenses': 'Расходы на продажу',
             'other_income_expenses': 'Прочие доходы/расходы',
             'net_profit': 'Чистая прибыль',
-            'vat_deductible': 'НДС к вычету',
-            'vat_to_budget': 'НДС к уплате',
+            'vat_deductible': 'НДС покупки',
+            'vat_to_budget': 'НДС продажи',
             'quantity': 'Кол-во',
             'import_date': 'Дата импорта'
         }
@@ -2393,7 +2563,7 @@ class MainWindow(QMainWindow):
                 value = row[col] if col in row.index else ''
                 # Форматирование числовых колонок
                 if col in ['purchase_amount_with_vat', 'sales_amount_without_vat', 
-                        'revenue', 'vat_in_revenue', 'cost_price', 'gross_profit',
+                        'revenue', 'cost_price', 'gross_profit',
                         'sales_expenses', 'other_income_expenses', 'net_profit',
                         'vat_deductible', 'vat_to_budget']:
                     if isinstance(value, (int, float)):
@@ -2414,6 +2584,65 @@ class MainWindow(QMainWindow):
         
         # Автоматическая подгонка ширины колонок
         self.table_view.resizeColumnsToContents()
+
+    #  """Рассчитывает финансовые показатели на основе DataFrame (по умолчанию self.current_df)"""
+    def calculate_financials(self, df=None):
+        """Рассчитывает финансовые показатели на основе DataFrame (по умолчанию self.current_df)"""
+        if df is None:
+            df = self.current_df
+        if df is None or df.empty:
+            return {
+                'revenue_with_vat': 0,
+                'revenue_without_vat': 0,
+                'expenses_with_vat': 0,
+                'expenses_without_vat': 0,
+                'gross_profit_with_vat': 0,
+                'profit_without_vat': 0,
+                'profit_margin': 0,
+                'vat_sales': 0,
+                'vat_purchases': 0,
+                'vat_to_budget_net': 0,
+                'profit_tax': 0,
+            }
+
+        # Выручка (только продажи)
+        sales_df = df[df['doc_type'] == 'sales_book']
+        revenue_with_vat = sales_df['sales_amount_with_vat'].sum() if 'sales_amount_with_vat' in sales_df else 0
+        revenue_without_vat = sales_df['sales_amount_without_vat'].sum() if 'sales_amount_without_vat' in sales_df else 0
+        vat_sales = sales_df['vat_to_budget'].sum() if 'vat_to_budget' in sales_df else 0
+
+        # Затраты (только покупки)
+        purchases_df = df[df['doc_type'] == 'purchase_book']
+        expenses_with_vat = purchases_df['purchase_amount_with_vat'].sum() if 'purchase_amount_with_vat' in purchases_df else 0
+        vat_purchases = purchases_df['vat_deductible'].sum() if 'vat_deductible' in purchases_df else 0
+        expenses_without_vat = expenses_with_vat - vat_purchases
+
+        # Прибыль
+        gross_profit_with_vat = revenue_with_vat - expenses_with_vat
+        profit_without_vat = revenue_without_vat - expenses_without_vat
+
+        # Норма прибыли
+        profit_margin = (profit_without_vat / revenue_without_vat * 100) if revenue_without_vat != 0 else 0
+
+        # НДС в бюджет
+        vat_to_budget_net = vat_sales - vat_purchases
+
+        # Добавление налога на прибыль (25% от прибыли без НДС)
+        profit_tax = profit_without_vat * 0.25
+
+        return {
+            'revenue_with_vat': revenue_with_vat,
+            'revenue_without_vat': revenue_without_vat,
+            'expenses_with_vat': expenses_with_vat,
+            'expenses_without_vat': expenses_without_vat,
+            'gross_profit_with_vat': gross_profit_with_vat,
+            'profit_without_vat': profit_without_vat,
+            'profit_margin': profit_margin,
+            'vat_sales': vat_sales,
+            'vat_purchases': vat_purchases,
+            'vat_to_budget_net': vat_to_budget_net,
+            'profit_tax': profit_tax,
+        }
 
     # =====================================================================================
     # """Применение фильтров"""
@@ -2439,35 +2668,33 @@ class MainWindow(QMainWindow):
         if not filtered_df.empty:
             self.current_df = filtered_df
             self.display_data(filtered_df)
-            self.update_totals()
+            self.update_summary()
             self.update_charts()
         else:
             # Если нет данных, показываем пустую таблицу
             self.current_df = pd.DataFrame()
             self.display_data(self.current_df)
             self.update_filter_combos()
-            self.update_totals()
+            self.update_summary()
             self.update_charts()
-    
-    def update_totals(self):
-        total_revenue = 0
-        total_vat = 0
-        total_profit = 0
 
-        if self.current_df is not None and not self.current_df.empty:
-            for col in ['revenue', 'vat_to_budget', 'net_profit']:
-                if col in self.current_df.columns:
-                    self.current_df[col] = pd.to_numeric(
-                        self.current_df[col], errors='coerce'
-                    ).fillna(0)
+    # """Обновляет панель итогов на основе текущего DataFrame."""
+    def update_summary(self):
 
-            total_revenue = self.current_df['revenue'].sum()
-            total_vat = self.current_df['vat_to_budget'].sum()
-            total_profit = self.current_df['net_profit'].sum()
-
-        self.revenue_label.setText(f"Выручка: {total_revenue:,.0f} ₽".replace(",", " "))
-        self.vat_label.setText(f"НДС к уплате: {total_vat:,.0f} ₽".replace(",", " "))
-        self.profit_label.setText(f"Чистая прибыль: {total_profit:,.0f} ₽".replace(",", " "))
+        """Обновляет панель итогов на основе текущего DataFrame."""
+        fin = self.calculate_financials()
+        
+        self.revenue_with_vat_label.setText(f"Выручка с НДС: {fin['revenue_with_vat']:,.0f} ₽".replace(",", " "))
+        self.revenue_without_vat_label.setText(f"Выручка без НДС: {fin['revenue_without_vat']:,.0f} ₽".replace(",", " "))
+        self.expenses_with_vat_label.setText(f"Затраты с НДС: {fin['expenses_with_vat']:,.0f} ₽".replace(",", " "))
+        self.expenses_without_vat_label.setText(f"Затраты без НДС: {fin['expenses_without_vat']:,.0f} ₽".replace(",", " "))
+        self.gross_profit_with_vat_label.setText(f"Валовая прибыль: {fin['gross_profit_with_vat']:,.0f} ₽".replace(",", " "))
+        self.profit_without_vat_label.setText(f"Прибыль без НДС: {fin['profit_without_vat']:,.0f} ₽".replace(",", " "))
+        self.profit_margin_label.setText(f"Норма прибыли: {fin['profit_margin']:.2f}%")
+        self.vat_sales_label.setText(f"НДС продажи: {fin['vat_sales']:,.0f} ₽".replace(",", " "))
+        self.vat_purchases_label.setText(f"НДС покупки: {fin['vat_purchases']:,.0f} ₽".replace(",", " "))
+        self.vat_to_budget_net_label.setText(f"НДС в бюджет: {fin['vat_to_budget_net']:,.0f} ₽".replace(",", " "))
+        self.profit_tax_label.setText(f"Налог на прибыль: {fin['profit_tax']:,.0f} ₽".replace(",", " "))
         
     def update_charts(self):
         if self.current_df is None or self.current_df.empty:
@@ -2512,7 +2739,7 @@ class MainWindow(QMainWindow):
                 if not company_vat.empty and company_vat.sum() != 0:
                     colors = plt.cm.tab10(np.linspace(0, 1, len(company_vat)))
                     bars = self.axes[0, 1].bar(company_vat.index, company_vat.values, color=colors)
-                    self.axes[0, 1].set_title('НДС к уплате по компаниям')
+                    self.axes[0, 1].set_title('НДС продажи по компаниям')
                     self.axes[0, 1].set_ylabel('Сумма НДС, ₽')
                     self.axes[0, 1].tick_params(axis='x', rotation=45)
                     # Добавление значений над столбцами
@@ -2631,14 +2858,13 @@ class MainWindow(QMainWindow):
             'sales_amount_without_vat': 'Сумма продажи без НДС',
             'sales_amount_with_vat': 'Сумма продажи с НДС',
             'revenue': 'Выручка',
-            'vat_in_revenue': 'НДС в выручке',
             'cost_price': 'Себестоимость',
             'gross_profit': 'Валовая прибыль',
             'sales_expenses': 'Расходы на продажу',
             'other_income_expenses': 'Прочие доходы/расходы',
             'net_profit': 'Чистая прибыль',
-            'vat_deductible': 'НДС к вычету',
-            'vat_to_budget': 'НДС к уплате',
+            'vat_deductible': 'НДС покупки',
+            'vat_to_budget': 'НДС продажи',
             'quantity': 'Кол-во',
             'import_date': 'Дата импорта'
         }
@@ -2666,7 +2892,7 @@ class MainWindow(QMainWindow):
                     
                     # Сводная информация
                     summary_df = pd.DataFrame({
-                        'Показатель': ['Общая выручка', 'Общий НДС к уплате', 'Общая прибыль', 
+                        'Показатель': ['Общая выручка', 'Общий НДС продажи', 'Общая прибыль', 
                                       'Количество записей', 'Дата экспорта'],
                         'Значение': [
                             f"{self.current_df['revenue'].sum():,.0f} ₽".replace(",", " "),
@@ -2717,12 +2943,10 @@ class MainWindow(QMainWindow):
         file_path, _ = QFileDialog.getSaveFileName(
             self, "Сохранить как PDF", "отчет_buh_tuund.pdf", "PDF Files (*.pdf)"
         )
-
         if not file_path:
             return
 
         try:
-            # --- Регистрация шрифта с поддержкой кириллицы ---
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
             from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -2731,67 +2955,99 @@ class MainWindow(QMainWindow):
             from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
             from reportlab.lib.pagesizes import A4
 
-            # Регистрируем шрифт Arial
-            pdfmetrics.registerFont(TTFont('Arial', 'arial.ttf'))
+            # Регистрация шрифта (если доступен)
+            try:
+                pdfmetrics.registerFont(TTFont('Arial', 'arial.ttf'))
+                font_available = True
+            except:
+                font_available = False
 
             doc = SimpleDocTemplate(file_path, pagesize=A4)
             elements = []
             styles = getSampleStyleSheet()
 
-            # Устанавливаем Arial для всех стандартных стилей
-            for style_name in styles.byName:
-                styles[style_name].fontName = 'Arial'
+            if font_available:
+                for style_name in styles.byName:
+                    styles[style_name].fontName = 'Arial'
 
-            # Стиль для заголовка
+            # Получаем название компании (фирмы)
+            company_name = "Неизвестная компания"
+            if not self.current_df.empty and 'company' in self.current_df.columns:
+                unique_companies = self.current_df['company'].dropna().unique()
+                if len(unique_companies) > 0:
+                    company_name = unique_companies[0]
+
+            # Заголовок с названием компании
             title_style = ParagraphStyle(
                 'CustomTitle',
                 parent=styles['Heading1'],
-                fontName='Arial',
+                fontName='Arial' if font_available else styles['Heading1'].fontName,
                 fontSize=16,
                 alignment=TA_CENTER,
                 spaceAfter=20,
                 textColor=colors.HexColor('#2c3e50')
             )
+            elements.append(Paragraph(f"БУХГАЛТЕРСКИЙ ОТЧЕТ<br/>{company_name}", title_style))
 
-            # --- Заголовок ---
-            elements.append(Paragraph("БУХГАЛТЕРСКИЙ ОТЧЕТ BUHTUUNDOTCHET", title_style))
+            # Определяем период
+            period_str = "не определен"
+            if not self.current_df.empty and 'period_start' in self.current_df.columns and 'period_end' in self.current_df.columns:
+                try:
+                    start_min = self.current_df['period_start'].min()
+                    end_max = self.current_df['period_end'].max()
+                    start_dt = datetime.strptime(start_min, "%Y-%m-%d")
+                    end_dt = datetime.strptime(end_max, "%Y-%m-%d")
+                    period_str = f"с {start_dt.strftime('%d.%m.%Y')} по {end_dt.strftime('%d.%m.%Y')}"
+                except:
+                    period_str = f"с {start_min} по {end_max}"
 
-            # --- Информация ---
             info_text = f"Дата формирования: {datetime.now().strftime('%d.%m.%Y %H:%M')} | Записей: {len(self.current_df)}"
             elements.append(Paragraph(info_text, styles['Normal']))
+            elements.append(Paragraph(f"Отчетный период: {period_str}", styles['Normal']))
             elements.append(Spacer(1, 20))
 
-            # --- Итоговые показатели (каждый отдельным абзацем) ---
-            total_revenue = self.current_df['revenue'].sum()
-            total_vat = self.current_df['vat_to_budget'].sum()
-            total_profit = self.current_df['net_profit'].sum()
-
-            elements.append(Paragraph("<b>ИТОГОВЫЕ ПОКАЗАТЕЛИ:</b>", styles['Heading2']))
-            elements.append(Spacer(1, 6))
-            elements.append(Paragraph(f"Общая выручка: {total_revenue:,.0f} ₽", styles['Normal']))
-            elements.append(Paragraph(f"НДС к уплате в бюджет: {total_vat:,.0f} ₽", styles['Normal']))
-            elements.append(Paragraph(f"Общая чистая прибыль: {total_profit:,.0f} ₽", styles['Normal']))
+            # Финансовые показатели
+            fin = self.calculate_financials()
+            elements.append(Paragraph("<b>ФИНАНСОВЫЕ ПОКАЗАТЕЛИ</b>", styles['Heading2']))
+            elements.append(Paragraph(f"Выручка с НДС: {fin['revenue_with_vat']:,.0f} ₽", styles['Normal']))
+            elements.append(Paragraph(f"Выручка без НДС: {fin['revenue_without_vat']:,.0f} ₽", styles['Normal']))
+            elements.append(Paragraph(f"Затраты с НДС: {fin['expenses_with_vat']:,.0f} ₽", styles['Normal']))
+            elements.append(Paragraph(f"Затраты без НДС: {fin['expenses_without_vat']:,.0f} ₽", styles['Normal']))
+            elements.append(Paragraph(f"Валовая прибыль (с НДС): {fin['gross_profit_with_vat']:,.0f} ₽", styles['Normal']))
+            elements.append(Paragraph(f"Прибыль без НДС: {fin['profit_without_vat']:,.0f} ₽", styles['Normal']))
+            elements.append(Paragraph(f"Норма прибыли: {fin['profit_margin']:.2f}%", styles['Normal']))
+            elements.append(Paragraph(f"НДС продажи: {fin['vat_sales']:,.0f} ₽", styles['Normal']))
+            elements.append(Paragraph(f"НДС покупки: {fin['vat_purchases']:,.0f} ₽", styles['Normal']))
+            elements.append(Paragraph(f"НДС в бюджет: {fin['vat_to_budget_net']:,.0f} ₽", styles['Normal']))
             elements.append(Spacer(1, 20))
 
-            # --- График ---
+            # График
             chart_path = "temp_chart.png"
             self.figure.savefig(chart_path, format='png', dpi=150, bbox_inches='tight')
             elements.append(Paragraph("Визуализация данных:", styles['Heading2']))
             elements.append(Image(chart_path, width=400, height=300))
             elements.append(Spacer(1, 20))
 
-            # --- Таблица (первые 20 строк) ---
+            # Таблица данных
             elements.append(Paragraph("Данные отчета (первые 20 записей):", styles['Heading2']))
-
-            table_data = [['Период', 'Компания', 'Товар', 'Выручка', 'НДС к уплате', 'Прибыль']]
+            table_data = [['Период', 'Компания', 'Контрагент', 'Выручка с НДС', 'НДС продажи', 'Прибыль без НДС']]
             for _, row in self.current_df.head(20).iterrows():
+                counterparty = row.get('buyer', '') or row.get('seller', '') or row.get('nomenclature', '')
+                profit = row.get('net_profit', 0)
+                period_str = row.get('period_start', '')
+                if period_str and isinstance(period_str, str):
+                    try:
+                        dt = datetime.strptime(period_str, "%Y-%m-%d")
+                        period_str = dt.strftime("%m.%Y")
+                    except:
+                        pass
                 table_data.append([
-                    str(row.get('period', '')),
-                    str(row.get('company', '')),
-                    str(row.get('nomenclature', ''))[:20],
-                    f"{row.get('revenue', 0):,.0f} ₽".replace(",", " "),
+                    period_str,
+                    str(row.get('company', ''))[:20],
+                    counterparty[:20],
+                    f"{row.get('sales_amount_with_vat', 0):,.0f} ₽".replace(",", " "),
                     f"{row.get('vat_to_budget', 0):,.0f} ₽".replace(",", " "),
-                    f"{row.get('net_profit', 0):,.0f} ₽".replace(",", " ")
+                    f"{profit:,.0f} ₽".replace(",", " ")
                 ])
 
             table = Table(table_data)
@@ -2799,32 +3055,29 @@ class MainWindow(QMainWindow):
                 ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Arial'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Arial' if font_available else 'Helvetica'),
                 ('FONTSIZE', (0, 0), (-1, 0), 10),
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
                 ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
                 ('GRID', (0, 0), (-1, -1), 1, colors.black),
                 ('FONTSIZE', (0, 1), (-1, -1), 8),
-                ('FONTNAME', (0, 1), (-1, -1), 'Arial'),
+                ('FONTNAME', (0, 1), (-1, -1), 'Arial' if font_available else 'Helvetica'),
             ]))
             elements.append(table)
             elements.append(Spacer(1, 20))
 
-            # --- Подпись ---
             footer_style = ParagraphStyle(
                 'Footer',
                 parent=styles['Italic'],
-                fontName='Arial',
+                fontName='Arial' if font_available else styles['Italic'].fontName,
                 fontSize=8,
                 alignment=TA_CENTER,
                 textColor=colors.grey
             )
             elements.append(Paragraph("Сформировано программой BuhTuundOtchet v1.0", footer_style))
 
-            # Генерация PDF
             doc.build(elements)
 
-            # Удаление временного файла
             if os.path.exists(chart_path):
                 os.remove(chart_path)
 
@@ -2833,135 +3086,264 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при экспорте в PDF: {str(e)}")
     
-    
-    
+    #====================================================================================
+    # """Экспорт отчета в Word"""
     def export_to_word(self):
         """Экспорт отчета в Word"""
         if self.current_df is None or self.current_df.empty:
             QMessageBox.warning(self, "Предупреждение", "Нет данных для экспорта")
             return
-        
+
         file_path, _ = QFileDialog.getSaveFileName(
             self, "Сохранить как Word", "отчет_buh_tuund.docx", "Word Files (*.docx)"
         )
-        
-        if file_path:
-            try:
-                # Создание документа Word
-                doc = docx.Document()
-                
-                # Заголовок
-                title = doc.add_heading('БУХГАЛТЕРСКИЙ ОТЧЕТ BUHTUUNDOTCHET', 0)
-                title.alignment = docx.enum.text.WD_ALIGN_PARAGRAPH.CENTER
-                
-                # Информация о отчете
-                doc.add_paragraph(f'Дата формирования: {datetime.now().strftime("%d.%m.%Y %H:%M")}')
-                doc.add_paragraph(f'Количество записей: {len(self.current_df)}')
-                doc.add_paragraph()
-                
-                # Итоговые показатели
-                total_revenue = self.current_df['revenue'].sum()
-                total_vat = self.current_df['vat_to_budget'].sum()
-                total_profit = self.current_df['net_profit'].sum()
-                
-                totals_para = doc.add_paragraph()
-                totals_para.add_run('ИТОГОВЫЕ ПОКАЗАТЕЛИ:\n').bold = True
-                totals_para.add_run(f'Общая выручка: {total_revenue:,.0f} ₽\n'.replace(",", " "))
-                totals_para.add_run(f'НДС к уплате в бюджет: {total_vat:,.0f} ₽\n'.replace(",", " "))
-                totals_para.add_run(f'Общая чистая прибыль: {total_profit:,.0f} ₽'.replace(",", " "))
-                
-                doc.add_paragraph()
-                
-                # Сохранение графика и вставка в документ
-                chart_path = "temp_chart_word.png"
-                self.figure.savefig(chart_path, format='png', dpi=150, bbox_inches='tight')
-                
-                doc.add_heading('Визуализация данных:', level=2)
-                doc.add_picture(chart_path, width=Inches(6))
-                doc.add_paragraph()
-                
-                # Таблица с данными
-                doc.add_heading('Данные отчета (первые 15 записей):', level=2)
-                
-                # Создание таблицы
-                table = doc.add_table(rows=1, cols=6)
-                table.style = 'LightShading-Accent1'
-                
-                # Заголовки таблицы
-                headers = ['Период', 'Компания', 'Товар', 'Выручка', 'НДС к уплате', 'Прибыль']
-                for i, header in enumerate(headers):
-                    table.cell(0, i).text = header
-                    table.cell(0, i).paragraphs[0].runs[0].bold = True
-                
-                # Заполнение таблицы данными
-                for _, row in self.current_df.head(15).iterrows():
-                    cells = table.add_row().cells
-                    cells[0].text = str(row.get('period', ''))
-                    cells[1].text = str(row.get('company', ''))
-                    cells[2].text = str(row.get('nomenclature', ''))[:20]
-                    cells[3].text = f"{row.get('revenue', 0):,.0f} ₽".replace(",", " ")
-                    cells[4].text = f"{row.get('vat_to_budget', 0):,.0f} ₽".replace(",", " ")
-                    cells[5].text = f"{row.get('net_profit', 0):,.0f} ₽".replace(",", " ")
-                
-                doc.add_paragraph()
-                doc.add_paragraph('Сформировано программой BuhTuundOtchet v1.0').italic = True
-                
-                # Сохранение документа
-                doc.save(file_path)
-                
-                # Удаление временного файла
-                if os.path.exists(chart_path):
-                    os.remove(chart_path)
-                
-                QMessageBox.information(self, "Успех", f"Word файл сохранен: {file_path}")
-                
-            except Exception as e:
-                QMessageBox.critical(self, "Ошибка", f"Ошибка при экспорте в Word: {str(e)}")
-    
+        if not file_path:
+            return
+
+        try:
+            import docx
+            from docx.shared import Inches, Pt
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from datetime import datetime
+
+            doc = docx.Document()
+
+            # Получаем название компании (фирмы)
+            company_name = "Неизвестная компания"
+            if not self.current_df.empty and 'company' in self.current_df.columns:
+                unique_companies = self.current_df['company'].dropna().unique()
+                if len(unique_companies) > 0:
+                    company_name = unique_companies[0]
+
+            # Заголовок с названием компании
+            title = doc.add_heading(f'БУХГАЛТЕРСКИЙ ОТЧЕТ {company_name}', 0)
+            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+            # Информация о дате формирования
+            doc.add_paragraph(f'Дата формирования: {datetime.now().strftime("%d.%m.%Y %H:%M")}')
+
+            # Определяем отчетный период по данным
+            if not self.current_df.empty and 'period_start' in self.current_df.columns and 'period_end' in self.current_df.columns:
+                try:
+                    start_min = self.current_df['period_start'].min()
+                    end_max = self.current_df['period_end'].max()
+                    start_dt = datetime.strptime(start_min, "%Y-%m-%d")
+                    end_dt = datetime.strptime(end_max, "%Y-%m-%d")
+                    period_str = f"с {start_dt.strftime('%d.%m.%Y')} по {end_dt.strftime('%d.%m.%Y')}"
+                except:
+                    period_str = f"с {start_min} по {end_max}"
+            else:
+                period_str = "не определен"
+            doc.add_paragraph(f"Отчетный период: {period_str}")
+            doc.add_paragraph()
+
+            # Финансовые показатели
+            fin = self.calculate_financials()
+            doc.add_heading('ФИНАНСОВЫЕ ПОКАЗАТЕЛИ', level=2)
+            doc.add_paragraph(f"Выручка с НДС: {fin['revenue_with_vat']:,.0f} ₽".replace(",", " "))
+            doc.add_paragraph(f"Выручка без НДС: {fin['revenue_without_vat']:,.0f} ₽".replace(",", " "))
+            doc.add_paragraph(f"Затраты с НДС: {fin['expenses_with_vat']:,.0f} ₽".replace(",", " "))
+            doc.add_paragraph(f"Затраты без НДС: {fin['expenses_without_vat']:,.0f} ₽".replace(",", " "))
+            doc.add_paragraph(f"Валовая прибыль (с НДС): {fin['gross_profit_with_vat']:,.0f} ₽".replace(",", " "))
+            doc.add_paragraph(f"Прибыль без НДС: {fin['profit_without_vat']:,.0f} ₽".replace(",", " "))
+            doc.add_paragraph(f"Норма прибыли: {fin['profit_margin']:.2f}%")
+            doc.add_paragraph(f"НДС продажи: {fin['vat_sales']:,.0f} ₽".replace(",", " "))
+            doc.add_paragraph(f"НДС покупки: {fin['vat_purchases']:,.0f} ₽".replace(",", " "))
+            doc.add_paragraph(f"НДС в бюджет: {fin['vat_to_budget_net']:,.0f} ₽".replace(",", " "))
+            doc.add_paragraph()
+
+            # Сохранение графика и вставка
+            chart_path = "temp_chart_word.png"
+            self.figure.savefig(chart_path, format='png', dpi=150, bbox_inches='tight')
+            doc.add_heading('Визуализация данных:', level=2)
+            doc.add_picture(chart_path, width=Inches(6))
+            doc.add_paragraph()
+
+            # Таблица с данными (первые 15-20 строк)
+            doc.add_heading('Данные отчета (первые 15 записей):', level=2)
+
+            table = doc.add_table(rows=1, cols=6)
+            table.style = 'LightShading-Accent1'
+            hdr_cells = table.rows[0].cells
+            hdr_cells[0].text = 'Период'
+            hdr_cells[1].text = 'Компания'
+            hdr_cells[2].text = 'Контрагент'
+            hdr_cells[3].text = 'Выручка с НДС'
+            hdr_cells[4].text = 'НДС продажи'
+            hdr_cells[5].text = 'Прибыль без НДС'
+
+            for cell in hdr_cells:
+                for paragraph in cell.paragraphs:
+                    for run in paragraph.runs:
+                        run.font.bold = True
+
+            for _, row in self.current_df.head(15).iterrows():
+                cells = table.add_row().cells
+                period_str = row.get('period_start', '')
+                if period_str and isinstance(period_str, str):
+                    try:
+                        dt = datetime.strptime(period_str, "%Y-%m-%d")
+                        period_str = dt.strftime("%m.%Y")
+                    except:
+                        pass
+                cells[0].text = str(period_str)
+                cells[1].text = str(row.get('company', ''))[:30]
+                counterparty = row.get('buyer', '') or row.get('seller', '') or row.get('nomenclature', '')
+                cells[2].text = counterparty[:30]
+                cells[3].text = f"{row.get('sales_amount_with_vat', 0):,.0f} ₽".replace(",", " ")
+                cells[4].text = f"{row.get('vat_to_budget', 0):,.0f} ₽".replace(",", " ")
+                cells[5].text = f"{row.get('net_profit', 0):,.0f} ₽".replace(",", " ")
+
+            doc.add_paragraph()
+
+            footer = doc.add_paragraph('Сформировано программой BuhTuundOtchet v1.0')
+            footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            footer.italic = True
+
+            doc.save(file_path)
+
+            if os.path.exists(chart_path):
+                os.remove(chart_path)
+
+            QMessageBox.information(self, "Успех", f"Word файл сохранен: {file_path}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при экспорте в Word: {str(e)}")
+
+    #===============================================================
+    #"""Генерация быстрого отчета"""
     def generate_quick_report(self):
-        """Генерация быстрого отчета"""
+        """Генерация быстрого отчета с возможностью копирования и сохранения"""
         if self.current_df is None or self.current_df.empty:
             QMessageBox.warning(self, "Предупреждение", "Нет данных для отчета")
             return
-        
-        # Расчет основных показателей
-        total_revenue = self.current_df['revenue'].sum()
-        total_vat = self.current_df['vat_to_budget'].sum()
-        total_profit = self.current_df['net_profit'].sum()
-        
-        # Топ товаров
-        top_products = self.current_df.nlargest(5, 'net_profit')[['nomenclature', 'net_profit']]
-        top_products_text = "\n".join([f"{row['nomenclature']}: {row['net_profit']:,.0f} ₽" 
-                                      for _, row in top_products.iterrows()])
-        
-        # Сообщение с отчетом
-        report_text = f"""
+
+        # Финансовые показатели
+        fin = self.calculate_financials()
+
+        # Получаем название компании (фирмы)
+        company_name = "Неизвестная компания"
+        if not self.current_df.empty and 'company' in self.current_df.columns:
+            unique_companies = self.current_df['company'].dropna().unique()
+            if len(unique_companies) > 0:
+                company_name = unique_companies[0]
+
+        # Определяем фактический период по данным
+        period_str = "не определен"
+        if not self.current_df.empty and 'period_start' in self.current_df.columns and 'period_end' in self.current_df.columns:
+            try:
+                start_min = self.current_df['period_start'].min()
+                end_max = self.current_df['period_end'].max()
+                start_dt = datetime.strptime(start_min, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_max, "%Y-%m-%d")
+                period_str = f"с {start_dt.strftime('%d.%m.%Y')} по {end_dt.strftime('%d.%m.%Y')}"
+            except:
+                period_str = f"с {start_min} по {end_max}"
+
+        # Plain text версия для копирования и сохранения
+        report_plain = f"""БЫСТРЫЙ ОТЧЕТ BUHTUUNDOTCHET
+        Компания: {company_name}
+        Период анализа: {period_str}
+        Товарная группа: {self.group_combo.currentText()}
+
+        ОСНОВНЫЕ ПОКАЗАТЕЛИ:
+        - Выручка с НДС: {fin['revenue_with_vat']:,.0f} ₽
+        - Выручка без НДС: {fin['revenue_without_vat']:,.0f} ₽
+        - Затраты с НДС: {fin['expenses_with_vat']:,.0f} ₽
+        - Затраты без НДС: {fin['expenses_without_vat']:,.0f} ₽
+        - Валовая прибыль (с НДС): {fin['gross_profit_with_vat']:,.0f} ₽
+        - Прибыль без НДС: {fin['profit_without_vat']:,.0f} ₽
+        - Норма прибыли: {fin['profit_margin']:.2f}%
+        - НДС продажи: {fin['vat_sales']:,.0f} ₽
+        - НДС покупки: {fin['vat_purchases']:,.0f} ₽
+        - НДС в бюджет: {fin['vat_to_budget_net']:,.0f} ₽
+
+        ТОП-5 товаров по прибыльности:
+        {self._get_top_products_text()}
+
+        Сформировано: {datetime.now().strftime('%d.%m.%Y %H:%M')}"""
+
+        # HTML версия для красивого отображения
+        report_html = f"""
         <h3>БЫСТРЫЙ ОТЧЕТ BUHTUUNDOTCHET</h3>
-        <p><b>Период анализа:</b> {self.period_combo.currentText()}</p>
-        <p><b>Компания:</b> {self.company_combo.currentText()}</p>
+        <p><b>Компания:</b> {company_name}</p>
+        <p><b>Период анализа:</b> {period_str}</p>
+        <p><b>Товарная группа:</b> {self.group_combo.currentText()}</p>
         <hr>
         <p><b>ОСНОВНЫЕ ПОКАЗАТЕЛИ:</b></p>
-        <p>• Общая выручка: <span style='color: #27ae60; font-weight: bold;'>{total_revenue:,.0f} ₽</span></p>
-        <p>• НДС к уплате в бюджет: <span style='color: #e74c3c; font-weight: bold;'>{total_vat:,.0f} ₽</span></p>
-        <p>• Чистая прибыль: <span style='color: #3498db; font-weight: bold;'>{total_profit:,.0f} ₽</span></p>
+        <p>• Выручка с НДС: <span style='color: #27ae60; font-weight: bold;'>{fin['revenue_with_vat']:,.0f} ₽</span></p>
+        <p>• Выручка без НДС: <span style='color: #27ae60; font-weight: bold;'>{fin['revenue_without_vat']:,.0f} ₽</span></p>
+        <p>• Затраты с НДС: <span style='color: #e74c3c; font-weight: bold;'>{fin['expenses_with_vat']:,.0f} ₽</span></p>
+        <p>• Затраты без НДС: <span style='color: #e74c3c; font-weight: bold;'>{fin['expenses_without_vat']:,.0f} ₽</span></p>
+        <p>• Валовая прибыль (с НДС): <span style='color: #3498db; font-weight: bold;'>{fin['gross_profit_with_vat']:,.0f} ₽</span></p>
+        <p>• Прибыль без НДС: <span style='color: #3498db; font-weight: bold;'>{fin['profit_without_vat']:,.0f} ₽</span></p>
+        <p>• Норма прибыли: <span style='color: #f39c12; font-weight: bold;'>{fin['profit_margin']:.2f}%</span></p>
+        <p>• НДС продажи: <span style='color: #9b59b6; font-weight: bold;'>{fin['vat_sales']:,.0f} ₽</span></p>
+        <p>• НДС покупки: <span style='color: #9b59b6; font-weight: bold;'>{fin['vat_purchases']:,.0f} ₽</span></p>
+        <p>• НДС в бюджет: <span style='color: #e67e22; font-weight: bold;'>{fin['vat_to_budget_net']:,.0f} ₽</span></p>
         <hr>
         <p><b>ТОП-5 товаров по прибыльности:</b></p>
-        <pre>{top_products_text}</pre>
+        <pre>{self._get_top_products_text()}</pre>
         <hr>
         <p><i>Сформировано: {datetime.now().strftime('%d.%m.%Y %H:%M')}</i></p>
         """
-        
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("Быстрый отчет")
-        msg_box.setTextFormat(Qt.TextFormat.RichText)
-        msg_box.setText(report_text)
-        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
-        msg_box.exec()
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Быстрый отчет")
+        dlg.setMinimumSize(600, 500)
+        layout = QVBoxLayout(dlg)
+
+        text_edit = QTextEdit()
+        text_edit.setHtml(report_html)
+        text_edit.setReadOnly(True)
+        layout.addWidget(text_edit)
+
+        button_box = QDialogButtonBox()
+        btn_copy = QPushButton("Копировать")
+        btn_copy.clicked.connect(lambda: self._copy_report_to_clipboard(report_plain))
+        btn_save = QPushButton("Сохранить как...")
+        btn_save.clicked.connect(lambda: self._save_report_to_txt(report_plain))
+        btn_close = QPushButton("Закрыть")
+        btn_close.clicked.connect(dlg.accept)
+
+        button_box.addButton(btn_copy, QDialogButtonBox.ButtonRole.ActionRole)
+        button_box.addButton(btn_save, QDialogButtonBox.ButtonRole.ActionRole)
+        button_box.addButton(btn_close, QDialogButtonBox.ButtonRole.RejectRole)
+
+        layout.addWidget(button_box)
+        dlg.exec()
     
+    #-------------------------------------------------------------------------------
+    #"""Возвращает текстовое представление топ-5 товаров по прибыльности"""
+    def _get_top_products_text(self):
+        """Возвращает текстовое представление топ-5 товаров по прибыльности"""
+        profit_col = 'net_profit'
+        if profit_col in self.current_df.columns and not self.current_df.empty:
+            # Сортируем по убыванию прибыли и берём первые 5
+            top_products = self.current_df.nlargest(5, profit_col)[['nomenclature', profit_col]]
+            lines = []
+            for _, row in top_products.iterrows():
+                # Если номенклатура пустая, пропускаем или пишем "Без названия"
+                name = row['nomenclature'] if row['nomenclature'] else "Без названия"
+                lines.append(f"{name}: {row[profit_col]:,.0f} ₽".replace(",", " "))
+            return "\n".join(lines)
+        else:
+            return "Нет данных"
+        
+    #======================================================
+    # """Копирует текст отчета в буфер обмена"""   
+    def _copy_report_to_clipboard(self, text):
+        """Копирует текст отчета в буфер обмена"""
+        clipboard = QApplication.clipboard()
+        clipboard.setText(text)
+        QMessageBox.information(self, "Готово", "Отчет скопирован в буфер обмена")
+
+    #=====================================================================================
+    #"""Показывает окно 'О программе'"""
     def show_about(self):
         """Показывает окно 'О программе'"""
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v6.0.0</p>
+        <p><b>Версия программы:</b> v7.0.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
@@ -2972,7 +3354,7 @@ class MainWindow(QMainWindow):
             <li>Хранение данных в SQLite базе</li>
             <li>Фильтрация по компаниям, периодам, товарным группам</li>
             <li>Расчет валовой и чистой прибыли</li>
-            <li>Акцент на расчете НДС к уплате в бюджет</li>
+            <li>Акцент на расчете НДС продажи в бюджет</li>
             <li>Визуализация данных (графики и диаграммы)</li>
             <li>Экспорт в Excel, PDF, Word</li>
             <li>Современный интерфейс с темной темой</li>
