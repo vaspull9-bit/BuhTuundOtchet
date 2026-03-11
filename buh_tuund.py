@@ -1,5 +1,5 @@
 #======================================================================
-# BuhTuundOtchet v7.1.0 - работают книги покупок и продаж, новые меню
+# BuhTuundOtchet v7.2.0 - Доработка отчетов есть длч КН ПОК и ПРОД
 import sys
 import os
 import sqlite3
@@ -513,57 +513,103 @@ class MainWindow(QMainWindow):
         summary_layout.addStretch()
 
         table_layout.addLayout(summary_layout)
-
-        # Вкладка с графиками
+        
+        #-----------------------------------------------------------------------
+        # Вкладка с графиками - КАЖДЫЙ ГРАФИК НА ОТДЕЛЬНОЙ СТРОКЕ
         self.charts_tab = QWidget()
         charts_layout = QVBoxLayout(self.charts_tab)
 
-        # Область с прокруткой
+        # Создаём область с прокруткой
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
-        # Контейнер для графиков
+        # Контейнер для всех графиков
         charts_container = QWidget()
         charts_container_layout = QVBoxLayout(charts_container)
-        charts_container_layout.setSpacing(40)  # Увеличили с 20 до 40 пикселей
+        charts_container_layout.setSpacing(30)  # Большие отступы между графиками
         charts_container_layout.setContentsMargins(10, 10, 10, 10)
 
-        # Первая фигура
-        self.figure, self.axes = plt.subplots(2, 2, figsize=(12, 10))
-        self.figure.patch.set_facecolor('#f5f5f5')
-        self.figure.subplots_adjust(hspace=0.4, wspace=0.3)  # Добавляем отступы между подграфиками внутри фигуры
-        self.canvas = FigureCanvas(self.figure)
-        self.canvas.setMinimumHeight(550)  # Увеличили высоту
-        charts_container_layout.addWidget(self.canvas)
+        # Первый график - отдельно
+        self.figure1, self.ax1 = plt.subplots(figsize=(10, 8))  # Увеличенный размер
+        self.figure1.patch.set_facecolor('#f5f5f5')
+        self.canvas1 = FigureCanvas(self.figure1)
+        self.canvas1.setMinimumHeight(500)
+        charts_container_layout.addWidget(QLabel("График 1. Распределение прибыли по товарным группам"))
+        charts_container_layout.addWidget(self.canvas1)
+        charts_container_layout.addSpacing(20)
 
-        # Добавляем разделитель (необязательно)
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setFrameShadow(QFrame.Shadow.Sunken)
-        charts_container_layout.addWidget(line)
-
-        # Вторая фигура
-        self.figure2, self.axes2 = plt.subplots(2, 2, figsize=(12, 10))
+        # Второй график - отдельно
+        self.figure2, self.ax2 = plt.subplots(figsize=(10, 8))
         self.figure2.patch.set_facecolor('#f5f5f5')
-        self.figure2.subplots_adjust(hspace=0.4, wspace=0.3)  # Добавляем отступы между подграфиками
         self.canvas2 = FigureCanvas(self.figure2)
-        self.canvas2.setMinimumHeight(550)  # Увеличили высоту
+        self.canvas2.setMinimumHeight(500)
+        charts_container_layout.addWidget(QLabel("График 2. ТОП-5 товаров по прибыльности"))
         charts_container_layout.addWidget(self.canvas2)
+        charts_container_layout.addSpacing(20)
 
-        # Добавляем разделитель
-        line2 = QFrame()
-        line2.setFrameShape(QFrame.Shape.HLine)
-        line2.setFrameShadow(QFrame.Shadow.Sunken)
-        charts_container_layout.addWidget(line2)
-
-        # Третья фигура
-        self.figure3, self.axes3 = plt.subplots(1, 1, figsize=(12, 5))
+        # Третий график - отдельно
+        self.figure3, self.ax3 = plt.subplots(figsize=(10, 8))
         self.figure3.patch.set_facecolor('#f5f5f5')
         self.canvas3 = FigureCanvas(self.figure3)
-        self.canvas3.setMinimumHeight(350)  # Увеличили высоту
+        self.canvas3.setMinimumHeight(500)
+        charts_container_layout.addWidget(QLabel("График 3. Закупки с НДС по кварталам"))
         charts_container_layout.addWidget(self.canvas3)
+        charts_container_layout.addSpacing(20)
+
+        # Четвертый график - отдельно
+        self.figure4, self.ax4 = plt.subplots(figsize=(10, 8))
+        self.figure4.patch.set_facecolor('#f5f5f5')
+        self.canvas4 = FigureCanvas(self.figure4)
+        self.canvas4.setMinimumHeight(500)
+        charts_container_layout.addWidget(QLabel("График 4. Выручка с НДС по кварталам"))
+        charts_container_layout.addWidget(self.canvas4)
+        charts_container_layout.addSpacing(20)
+
+        # Пятый график - отдельно
+        self.figure5, self.ax5 = plt.subplots(figsize=(10, 8))
+        self.figure5.patch.set_facecolor('#f5f5f5')
+        self.canvas5 = FigureCanvas(self.figure5)
+        self.canvas5.setMinimumHeight(500)
+        charts_container_layout.addWidget(QLabel("График 5. НДС в бюджет по кварталам"))
+        charts_container_layout.addWidget(self.canvas5)
+        charts_container_layout.addSpacing(20)
+
+        # Шестой график - отдельно
+        self.figure6, self.ax6 = plt.subplots(figsize=(10, 8))
+        self.figure6.patch.set_facecolor('#f5f5f5')
+        self.canvas6 = FigureCanvas(self.figure6)
+        self.canvas6.setMinimumHeight(500)
+        charts_container_layout.addWidget(QLabel("График 6. НДС по выручке по кварталам"))
+        charts_container_layout.addWidget(self.canvas6)
+        charts_container_layout.addSpacing(20)
+
+        # Седьмой график - отдельно
+        self.figure7, self.ax7 = plt.subplots(figsize=(10, 8))
+        self.figure7.patch.set_facecolor('#f5f5f5')
+        self.canvas7 = FigureCanvas(self.figure7)
+        self.canvas7.setMinimumHeight(500)
+        charts_container_layout.addWidget(QLabel("График 7. НДС по затратам по кварталам"))
+        charts_container_layout.addWidget(self.canvas7)
+        charts_container_layout.addSpacing(20)
+
+        # Восьмой график - отдельно
+        self.figure8, self.ax8 = plt.subplots(figsize=(10, 8))
+        self.figure8.patch.set_facecolor('#f5f5f5')
+        self.canvas8 = FigureCanvas(self.figure8)
+        self.canvas8.setMinimumHeight(500)
+        charts_container_layout.addWidget(QLabel("График 8. Валовая прибыль по кварталам"))
+        charts_container_layout.addWidget(self.canvas8)
+        charts_container_layout.addSpacing(20)
+
+        # Девятый график - отдельно
+        self.figure9, self.ax9 = plt.subplots(figsize=(10, 8))
+        self.figure9.patch.set_facecolor('#f5f5f5')
+        self.canvas9 = FigureCanvas(self.figure9)
+        self.canvas9.setMinimumHeight(500)
+        charts_container_layout.addWidget(QLabel("График 9. Затраты по кварталам (все налоги и закупки)"))
+        charts_container_layout.addWidget(self.canvas9)
 
         # Кнопка обновления
         charts_btn_layout = QHBoxLayout()
@@ -573,8 +619,6 @@ class MainWindow(QMainWindow):
         charts_container_layout.addLayout(charts_btn_layout)
 
         charts_container_layout.addStretch()
-
-
         scroll_area.setWidget(charts_container)
         charts_layout.addWidget(scroll_area)
 
@@ -1688,245 +1732,345 @@ class MainWindow(QMainWindow):
     #===========================================================================================
     # ==================== ГРАФИКИ ====================
     def update_charts(self):
+        """Создает 9 отдельных графиков и сохраняет их в файлы"""
         if self.current_df is None or self.current_df.empty:
-            for fig in [self.figure, self.figure2, self.figure3]:
-                for ax in fig.axes:
-                    ax.clear()
-                    ax.text(0.5, 0.5, 'Нет данных для отображения', 
-                        ha='center', va='center', fontsize=12)
-            self.canvas.draw()
-            self.canvas2.draw()
-            self.canvas3.draw()
+            # Очищаем все холсты
+            for i in range(1, 10):
+                canvas = getattr(self, f'canvas{i}', None)
+                if canvas:
+                    fig = getattr(self, f'figure{i}', None)
+                    if fig:
+                        for ax in fig.axes:
+                            ax.clear()
+                            ax.text(0.5, 0.5, 'Нет данных для отображения', 
+                                ha='center', va='center', fontsize=12)
+                        canvas.draw()
             return
 
         df_clean = self.current_df.fillna(0)
         
-        # Определяем год для заголовка
-        year_text = "Графики за "
-        if 'period_start' in df_clean.columns and not df_clean['period_start'].empty:
-            years = sorted(pd.to_datetime(df_clean['period_start']).dt.year.unique())
-            if len(years) == 1:
-                year_text += f"{years[0]} год"
-            else:
-                year_text += f"{min(years)}-{max(years)} годы"
-        else:
-            year_text += "весь период"
-        
         # Добавляем кварталы
         if 'period_start' in df_clean.columns:
             df_clean['quarter'] = pd.to_datetime(df_clean['period_start']).dt.to_period('Q')
-            df_clean['quarter_str'] = df_clean['quarter'].astype(str).str.replace('Q', ' Кв.')
+            df_clean['quarter_str'] = df_clean['quarter'].dt.quarter.astype(str) + 'кв'
 
         sales_df = df_clean[df_clean['doc_type'] == 'sales_book']
         purchases_df = df_clean[df_clean['doc_type'] == 'purchase_book']
 
-        # Очищаем все фигуры
-        for fig in [self.figure, self.figure2, self.figure3]:
-            for ax in fig.axes:
-                ax.clear()
+        # Словарь для хранения путей к графикам
+        self.chart_paths = {}
 
-        # Настройки шрифтов для всех графиков
-        plt.rcParams.update({
-            'font.size': 9,
-            'axes.titlesize': 11,
-            'axes.labelsize': 9,
-            'xtick.labelsize': 8,
-            'ytick.labelsize': 8,
-            'legend.fontsize': 8
-        })
-
-        # Функция для добавления значений над столбцами
-        def add_values(bars, ax, format_str='{:.0f}'):
-            for bar in bars:
-                height = bar.get_height()
-                if height > 0:
-                    ax.text(bar.get_x() + bar.get_width()/2., height,
-                        format_str.format(height).replace(",", " "),
-                        ha='center', va='bottom', fontsize=7)
-
-        # ========== ФИГУРА 1: Основные графики ==========
-        self.figure.suptitle(year_text, fontsize=14, fontweight='bold')
-        
-        # 1. Распределение прибыли по товарным группам
+        # ===== ГРАФИК 1. Распределение прибыли =====
+        self.ax1.clear()
         try:
             if 'product_group' in df_clean.columns:
                 group_profit = df_clean.groupby('product_group')['net_profit'].sum()
                 if not group_profit.empty and group_profit.sum() != 0:
                     colors1 = plt.cm.Set3(np.linspace(0, 1, len(group_profit)))
-                    wedges, texts, autotexts = self.axes[0, 0].pie(
-                        group_profit.values, 
-                        labels=group_profit.index,
-                        autopct='%1.1f%%', 
-                        colors=colors1, 
-                        startangle=90,
-                        textprops={'fontsize': 8}
-                    )
-                    self.axes[0, 0].set_title('1. Распределение прибыли', fontsize=10)
+                    self.ax1.pie(group_profit.values, labels=group_profit.index,
+                                autopct='%1.1f%%', colors=colors1, startangle=90)
+                    self.ax1.set_title('График 1. Распределение прибыли по товарным группам', fontsize=14)
                 else:
-                    self.axes[0, 0].text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+                    self.ax1.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+            else:
+                self.ax1.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
         except Exception as e:
-            self.axes[0, 0].text(0.5, 0.5, 'Ошибка', ha='center', va='center')
+            self.ax1.text(0.5, 0.5, f'Ошибка', ha='center', va='center')
+        
+        self.figure1.tight_layout()
+        path1 = "temp_chart_1.png"
+        self.figure1.savefig(path1, format='png', dpi=150, bbox_inches='tight')
+        self.chart_paths['graph1'] = path1
+        self.canvas1.draw()
 
-        # 2. ТОП-5 товаров
+        # ===== ГРАФИК 2. ТОП-5 товаров =====
+        self.ax2.clear()
         try:
             if not sales_df.empty and 'nomenclature' in sales_df.columns:
                 product_profit = sales_df.groupby('nomenclature')['net_profit'].sum().reset_index()
                 product_profit = product_profit[product_profit['nomenclature'] != '']
                 if not product_profit.empty:
                     top_products = product_profit.nlargest(5, 'net_profit')
-                    labels = [str(x)[:15] + '...' if len(str(x)) > 15 else str(x)
+                    labels = [str(x)[:20] + '...' if len(str(x)) > 20 else str(x)
                             for x in top_products['nomenclature']]
                     colors = plt.cm.viridis(np.linspace(0.2, 0.8, len(top_products)))
-                    bars = self.axes[0, 1].barh(labels, top_products['net_profit'], color=colors)
-                    self.axes[0, 1].set_title('2. ТОП-5 товаров по прибыльности', fontsize=10)
-                    self.axes[0, 1].set_xlabel('Прибыль, ₽', fontsize=8)
-                    # Добавляем значения
+                    bars = self.ax2.barh(labels, top_products['net_profit'], color=colors)
+                    self.ax2.set_title('График 2. ТОП-5 товаров по прибыльности', fontsize=14)
+                    self.ax2.set_xlabel('Прибыль, ₽')
                     for bar in bars:
                         width = bar.get_width()
                         if width > 0:
-                            self.axes[0, 1].text(width, bar.get_y() + bar.get_height()/2,
-                                                f'{width:,.0f}'.replace(",", " "),
-                                                ha='left', va='center', fontsize=7)
+                            self.ax2.text(width, bar.get_y() + bar.get_height()/2,
+                                        f'{width:,.0f}'.replace(",", " "),
+                                        ha='left', va='center', fontsize=9)
+                else:
+                    self.ax2.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+            else:
+                self.ax2.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
         except Exception as e:
-            self.axes[0, 1].text(0.5, 0.5, 'Ошибка', ha='center', va='center')
-
-        # 3. Закупки с НДС по кварталам
-        try:
-            if not purchases_df.empty and 'quarter' in purchases_df.columns:
-                purchases_q = purchases_df.groupby('quarter')['purchase_amount_with_vat'].sum().reset_index()
-                purchases_q['quarter_str'] = purchases_q['quarter'].astype(str).str.replace('Q', '')
-                colors = plt.cm.Oranges(np.linspace(0.3, 0.8, len(purchases_q)))
-                x_pos = range(len(purchases_q))
-                bars = self.axes[1, 0].bar(x_pos, purchases_q['purchase_amount_with_vat'], color=colors)
-                self.axes[1, 0].set_title('3. Закупки с НДС', fontsize=10)
-                self.axes[1, 0].set_ylabel('Сумма, ₽', fontsize=8)
-                self.axes[1, 0].set_xticks(x_pos)
-                self.axes[1, 0].set_xticklabels(purchases_q['quarter_str'], fontsize=7)
-                add_values(bars, self.axes[1, 0])
-        except Exception as e:
-            self.axes[1, 0].text(0.5, 0.5, 'Ошибка', ha='center', va='center')
-
-        # 4. Выручка с НДС по кварталам
-        try:
-            if not sales_df.empty and 'quarter' in sales_df.columns:
-                revenue_q = sales_df.groupby('quarter')['sales_amount_with_vat'].sum().reset_index()
-                revenue_q['quarter_str'] = revenue_q['quarter'].astype(str).str.replace('Q', '')
-                colors = plt.cm.Blues(np.linspace(0.3, 0.8, len(revenue_q)))
-                x_pos = range(len(revenue_q))
-                bars = self.axes[1, 1].bar(x_pos, revenue_q['sales_amount_with_vat'], color=colors)
-                self.axes[1, 1].set_title('4. Выручка с НДС', fontsize=10)
-                self.axes[1, 1].set_ylabel('Сумма, ₽', fontsize=8)
-                self.axes[1, 1].set_xticks(x_pos)
-                self.axes[1, 1].set_xticklabels(revenue_q['quarter_str'], fontsize=7)
-                add_values(bars, self.axes[1, 1])
-        except Exception as e:
-            self.axes[1, 1].text(0.5, 0.5, 'Ошибка', ha='center', va='center')
-
-        self.figure.subplots_adjust(hspace=0.4, wspace=0.3)
-        self.canvas.draw()
-
-        # ========== ФИГУРА 2: Следующие 4 графика ==========
-        self.figure2.suptitle(year_text, fontsize=14, fontweight='bold')
+            self.ax2.text(0.5, 0.5, 'Ошибка', ha='center', va='center')
         
-        # 5. НДС в бюджет по кварталам
-        try:
-            if 'quarter' in df_clean.columns:
-                vat_budget = df_clean.groupby('quarter').apply(
-                    lambda x: x['vat_to_budget'].sum() - x['vat_deductible'].sum()
-                ).reset_index(name='vat_budget')
-                vat_budget['quarter_str'] = vat_budget['quarter'].astype(str).str.replace('Q', '')
-                colors = plt.cm.Reds(np.linspace(0.3, 0.8, len(vat_budget)))
-                x_pos = range(len(vat_budget))
-                bars = self.axes2[0, 0].bar(x_pos, vat_budget['vat_budget'], color=colors)
-                self.axes2[0, 0].set_title('5. НДС в бюджет', fontsize=10)
-                self.axes2[0, 0].set_ylabel('Сумма НДС, ₽', fontsize=8)
-                self.axes2[0, 0].set_xticks(x_pos)
-                self.axes2[0, 0].set_xticklabels(vat_budget['quarter_str'], fontsize=7)
-                add_values(bars, self.axes2[0, 0])
-        except Exception as e:
-            self.axes2[0, 0].text(0.5, 0.5, 'Ошибка', ha='center', va='center')
-
-        # 6. НДС по выручке
-        try:
-            if not sales_df.empty and 'quarter' in sales_df.columns:
-                vat_sales_q = sales_df.groupby('quarter')['vat_to_budget'].sum().reset_index()
-                vat_sales_q['quarter_str'] = vat_sales_q['quarter'].astype(str).str.replace('Q', '')
-                colors = plt.cm.Greens(np.linspace(0.3, 0.8, len(vat_sales_q)))
-                x_pos = range(len(vat_sales_q))
-                bars = self.axes2[0, 1].bar(x_pos, vat_sales_q['vat_to_budget'], color=colors)
-                self.axes2[0, 1].set_title('6. НДС по выручке', fontsize=10)
-                self.axes2[0, 1].set_ylabel('Сумма НДС, ₽', fontsize=8)
-                self.axes2[0, 1].set_xticks(x_pos)
-                self.axes2[0, 1].set_xticklabels(vat_sales_q['quarter_str'], fontsize=7)
-                add_values(bars, self.axes2[0, 1])
-        except Exception as e:
-            self.axes2[0, 1].text(0.5, 0.5, 'Ошибка', ha='center', va='center')
-
-        # 7. НДС по затратам
-        try:
-            if not purchases_df.empty and 'quarter' in purchases_df.columns:
-                vat_purchases_q = purchases_df.groupby('quarter')['vat_deductible'].sum().reset_index()
-                vat_purchases_q['quarter_str'] = vat_purchases_q['quarter'].astype(str).str.replace('Q', '')
-                colors = plt.cm.Oranges(np.linspace(0.3, 0.8, len(vat_purchases_q)))
-                x_pos = range(len(vat_purchases_q))
-                bars = self.axes2[1, 0].bar(x_pos, vat_purchases_q['vat_deductible'], color=colors)
-                self.axes2[1, 0].set_title('7. НДС по затратам', fontsize=10)
-                self.axes2[1, 0].set_ylabel('Сумма НДС, ₽', fontsize=8)
-                self.axes2[1, 0].set_xticks(x_pos)
-                self.axes2[1, 0].set_xticklabels(vat_purchases_q['quarter_str'], fontsize=7)
-                add_values(bars, self.axes2[1, 0])
-        except Exception as e:
-            self.axes2[1, 0].text(0.5, 0.5, 'Ошибка', ha='center', va='center')
-
-        # 8. Валовая прибыль
-        try:
-            if not sales_df.empty and not purchases_df.empty:
-                revenue_q = sales_df.groupby('quarter')['sales_amount_with_vat'].sum().reset_index()
-                expenses_q = purchases_df.groupby('quarter')['purchase_amount_with_vat'].sum().reset_index()
-                profit_q = pd.merge(revenue_q, expenses_q, on='quarter', how='outer').fillna(0)
-                profit_q['gross_profit'] = profit_q['sales_amount_with_vat'] - profit_q['purchase_amount_with_vat']
-                profit_q['quarter_str'] = profit_q['quarter'].astype(str).str.replace('Q', '')
-                colors = plt.cm.Purples(np.linspace(0.3, 0.8, len(profit_q)))
-                x_pos = range(len(profit_q))
-                bars = self.axes2[1, 1].bar(x_pos, profit_q['gross_profit'], color=colors)
-                self.axes2[1, 1].set_title('8. Валовая прибыль', fontsize=10)
-                self.axes2[1, 1].set_ylabel('Прибыль, ₽', fontsize=8)
-                self.axes2[1, 1].set_xticks(x_pos)
-                self.axes2[1, 1].set_xticklabels(profit_q['quarter_str'], fontsize=7)
-                add_values(bars, self.axes2[1, 1])
-        except Exception as e:
-            self.axes2[1, 1].text(0.5, 0.5, 'Ошибка', ha='center', va='center')
-
-        self.figure2.subplots_adjust(hspace=0.4, wspace=0.3)
+        self.figure2.tight_layout()
+        path2 = "temp_chart_2.png"
+        self.figure2.savefig(path2, format='png', dpi=150, bbox_inches='tight')
+        self.chart_paths['graph2'] = path2
         self.canvas2.draw()
 
-        # ========== ФИГУРА 3: 9-й график ==========
-        self.figure3.suptitle(f"{year_text} - Затраты", fontsize=14, fontweight='bold')
-        
+        # ===== ГРАФИК 3. Закупки с НДС по кварталам =====
+        self.ax3.clear()
         try:
-            if not purchases_df.empty and 'quarter' in purchases_df.columns:
-                expenses_q = purchases_df.groupby('quarter')['purchase_amount_with_vat'].sum().reset_index()
-                expenses_q['quarter_str'] = expenses_q['quarter'].astype(str).str.replace('Q', '')
-                colors = plt.cm.Reds(np.linspace(0.3, 0.8, len(expenses_q)))
-                x_pos = range(len(expenses_q))
-                bars = self.axes3.bar(x_pos, expenses_q['purchase_amount_with_vat'], color=colors)
-                self.axes3.set_title('9. Затраты по кварталам (все налоги и закупки)', fontsize=11)
-                self.axes3.set_ylabel('Сумма затрат, ₽', fontsize=9)
-                self.axes3.set_xticks(x_pos)
-                self.axes3.set_xticklabels(expenses_q['quarter_str'], fontsize=8)
-                self.axes3.grid(True, alpha=0.3, axis='y')
-                add_values(bars, self.axes3)
+            if not purchases_df.empty and 'quarter_str' in purchases_df.columns:
+                purchases_q = purchases_df.groupby('quarter_str')['purchase_amount_with_vat'].sum().reset_index()
+                if not purchases_q.empty and purchases_q['purchase_amount_with_vat'].sum() != 0:
+                    colors = plt.cm.Oranges(np.linspace(0.3, 0.8, len(purchases_q)))
+                    x_pos = range(len(purchases_q))
+                    bars = self.ax3.bar(x_pos, purchases_q['purchase_amount_with_vat'], color=colors)
+                    self.ax3.set_title('График 3. Закупки с НДС по кварталам', fontsize=14)
+                    self.ax3.set_ylabel('Сумма, ₽')
+                    self.ax3.set_xticks(x_pos)
+                    self.ax3.set_xticklabels(purchases_q['quarter_str'])
+                    self.ax3.grid(True, alpha=0.3, axis='y')
+                    for bar in bars:
+                        height = bar.get_height()
+                        if height > 0:
+                            self.ax3.text(bar.get_x() + bar.get_width()/2., height,
+                                        f'{height:,.0f}'.replace(",", " "),
+                                        ha='center', va='bottom', fontsize=9)
+                else:
+                    self.ax3.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+            else:
+                self.ax3.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
         except Exception as e:
-            self.axes3.text(0.5, 0.5, 'Ошибка', ha='center', va='center')
-
-        self.figure3.subplots_adjust(bottom=0.15)
-        self.canvas3.draw()
+            self.ax3.text(0.5, 0.5, 'Ошибка', ha='center', va='center')
         
-        # Сохраняем для экспорта
-        self.chart_path2 = "temp_chart2.png"
-        self.chart_path3 = "temp_chart3.png"
-        self.figure2.savefig(self.chart_path2, format='png', dpi=150, bbox_inches='tight')
-        self.figure3.savefig(self.chart_path3, format='png', dpi=150, bbox_inches='tight')
+        self.figure3.tight_layout()
+        path3 = "temp_chart_3.png"
+        self.figure3.savefig(path3, format='png', dpi=150, bbox_inches='tight')
+        self.chart_paths['graph3'] = path3
+        self.canvas3.draw()
+
+        # ===== ГРАФИК 4. Выручка с НДС по кварталам =====
+        self.ax4.clear()
+        try:
+            if not sales_df.empty and 'quarter_str' in sales_df.columns:
+                revenue_q = sales_df.groupby('quarter_str')['sales_amount_with_vat'].sum().reset_index()
+                if not revenue_q.empty and revenue_q['sales_amount_with_vat'].sum() != 0:
+                    colors = plt.cm.Blues(np.linspace(0.3, 0.8, len(revenue_q)))
+                    x_pos = range(len(revenue_q))
+                    bars = self.ax4.bar(x_pos, revenue_q['sales_amount_with_vat'], color=colors)
+                    self.ax4.set_title('График 4. Выручка с НДС по кварталам', fontsize=14)
+                    self.ax4.set_ylabel('Сумма, ₽')
+                    self.ax4.set_xticks(x_pos)
+                    self.ax4.set_xticklabels(revenue_q['quarter_str'])
+                    self.ax4.grid(True, alpha=0.3, axis='y')
+                    for bar in bars:
+                        height = bar.get_height()
+                        if height > 0:
+                            self.ax4.text(bar.get_x() + bar.get_width()/2., height,
+                                        f'{height:,.0f}'.replace(",", " "),
+                                        ha='center', va='bottom', fontsize=9)
+                else:
+                    self.ax4.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+            else:
+                self.ax4.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+        except Exception as e:
+            self.ax4.text(0.5, 0.5, 'Ошибка', ha='center', va='center')
+        
+        self.figure4.tight_layout()
+        path4 = "temp_chart_4.png"
+        self.figure4.savefig(path4, format='png', dpi=150, bbox_inches='tight')
+        self.chart_paths['graph4'] = path4
+        self.canvas4.draw()
+
+        # ===== ГРАФИК 5. НДС в бюджет по кварталам =====
+        self.ax5.clear()
+        try:
+            if 'quarter_str' in df_clean.columns:
+                vat_budget = df_clean.groupby('quarter_str').apply(
+                    lambda x: x['vat_to_budget'].sum() - x['vat_deductible'].sum()
+                ).reset_index(name='vat_budget')
+                if not vat_budget.empty and vat_budget['vat_budget'].sum() != 0:
+                    colors = plt.cm.Reds(np.linspace(0.3, 0.8, len(vat_budget)))
+                    x_pos = range(len(vat_budget))
+                    bars = self.ax5.bar(x_pos, vat_budget['vat_budget'], color=colors)
+                    self.ax5.set_title('График 5. НДС в бюджет по кварталам', fontsize=14)
+                    self.ax5.set_ylabel('Сумма НДС, ₽')
+                    self.ax5.set_xticks(x_pos)
+                    self.ax5.set_xticklabels(vat_budget['quarter_str'])
+                    self.ax5.grid(True, alpha=0.3, axis='y')
+                    for bar in bars:
+                        height = bar.get_height()
+                        if height > 0:
+                            self.ax5.text(bar.get_x() + bar.get_width()/2., height,
+                                        f'{height:,.0f}'.replace(",", " "),
+                                        ha='center', va='bottom', fontsize=9)
+                else:
+                    self.ax5.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+            else:
+                self.ax5.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+        except Exception as e:
+            self.ax5.text(0.5, 0.5, 'Ошибка', ha='center', va='center')
+        
+        self.figure5.tight_layout()
+        path5 = "temp_chart_5.png"
+        self.figure5.savefig(path5, format='png', dpi=150, bbox_inches='tight')
+        self.chart_paths['graph5'] = path5
+        self.canvas5.draw()
+
+        # ===== ГРАФИК 6. НДС по выручке по кварталам =====
+        self.ax6.clear()
+        try:
+            if not sales_df.empty and 'quarter_str' in sales_df.columns:
+                vat_sales_q = sales_df.groupby('quarter_str')['vat_to_budget'].sum().reset_index()
+                if not vat_sales_q.empty and vat_sales_q['vat_to_budget'].sum() != 0:
+                    colors = plt.cm.Greens(np.linspace(0.3, 0.8, len(vat_sales_q)))
+                    x_pos = range(len(vat_sales_q))
+                    bars = self.ax6.bar(x_pos, vat_sales_q['vat_to_budget'], color=colors)
+                    self.ax6.set_title('График 6. НДС по выручке по кварталам', fontsize=14)
+                    self.ax6.set_ylabel('Сумма НДС, ₽')
+                    self.ax6.set_xticks(x_pos)
+                    self.ax6.set_xticklabels(vat_sales_q['quarter_str'])
+                    self.ax6.grid(True, alpha=0.3, axis='y')
+                    for bar in bars:
+                        height = bar.get_height()
+                        if height > 0:
+                            self.ax6.text(bar.get_x() + bar.get_width()/2., height,
+                                        f'{height:,.0f}'.replace(",", " "),
+                                        ha='center', va='bottom', fontsize=9)
+                else:
+                    self.ax6.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+            else:
+                self.ax6.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+        except Exception as e:
+            self.ax6.text(0.5, 0.5, 'Ошибка', ha='center', va='center')
+        
+        self.figure6.tight_layout()
+        path6 = "temp_chart_6.png"
+        self.figure6.savefig(path6, format='png', dpi=150, bbox_inches='tight')
+        self.chart_paths['graph6'] = path6
+        self.canvas6.draw()
+
+        # ===== ГРАФИК 7. НДС по затратам по кварталам =====
+        self.ax7.clear()
+        try:
+            if not purchases_df.empty and 'quarter_str' in purchases_df.columns:
+                vat_purchases_q = purchases_df.groupby('quarter_str')['vat_deductible'].sum().reset_index()
+                if not vat_purchases_q.empty and vat_purchases_q['vat_deductible'].sum() != 0:
+                    colors = plt.cm.Oranges(np.linspace(0.3, 0.8, len(vat_purchases_q)))
+                    x_pos = range(len(vat_purchases_q))
+                    bars = self.ax7.bar(x_pos, vat_purchases_q['vat_deductible'], color=colors)
+                    self.ax7.set_title('График 7. НДС по затратам по кварталам', fontsize=14)
+                    self.ax7.set_ylabel('Сумма НДС, ₽')
+                    self.ax7.set_xticks(x_pos)
+                    self.ax7.set_xticklabels(vat_purchases_q['quarter_str'])
+                    self.ax7.grid(True, alpha=0.3, axis='y')
+                    for bar in bars:
+                        height = bar.get_height()
+                        if height > 0:
+                            self.ax7.text(bar.get_x() + bar.get_width()/2., height,
+                                        f'{height:,.0f}'.replace(",", " "),
+                                        ha='center', va='bottom', fontsize=9)
+                else:
+                    self.ax7.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+            else:
+                self.ax7.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+        except Exception as e:
+            self.ax7.text(0.5, 0.5, 'Ошибка', ha='center', va='center')
+        
+        self.figure7.tight_layout()
+        path7 = "temp_chart_7.png"
+        self.figure7.savefig(path7, format='png', dpi=150, bbox_inches='tight')
+        self.chart_paths['graph7'] = path7
+        self.canvas7.draw()
+
+        # ===== ГРАФИК 8. Валовая прибыль по кварталам =====
+        self.ax8.clear()
+        try:
+            if not sales_df.empty and not purchases_df.empty:
+                revenue_q = sales_df.groupby('quarter_str')['sales_amount_with_vat'].sum().reset_index()
+                expenses_q = purchases_df.groupby('quarter_str')['purchase_amount_with_vat'].sum().reset_index()
+                profit_q = pd.merge(revenue_q, expenses_q, on='quarter_str', how='outer').fillna(0)
+                profit_q['gross_profit'] = profit_q['sales_amount_with_vat'] - profit_q['purchase_amount_with_vat']
+                if not profit_q.empty and profit_q['gross_profit'].sum() != 0:
+                    colors = plt.cm.Purples(np.linspace(0.3, 0.8, len(profit_q)))
+                    x_pos = range(len(profit_q))
+                    bars = self.ax8.bar(x_pos, profit_q['gross_profit'], color=colors)
+                    self.ax8.set_title('График 8. Валовая прибыль по кварталам', fontsize=14)
+                    self.ax8.set_ylabel('Прибыль, ₽')
+                    self.ax8.set_xticks(x_pos)
+                    self.ax8.set_xticklabels(profit_q['quarter_str'])
+                    self.ax8.grid(True, alpha=0.3, axis='y')
+                    for bar in bars:
+                        height = bar.get_height()
+                        if height > 0:
+                            self.ax8.text(bar.get_x() + bar.get_width()/2., height,
+                                        f'{height:,.0f}'.replace(",", " "),
+                                        ha='center', va='bottom', fontsize=9)
+                else:
+                    self.ax8.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+            else:
+                self.ax8.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+        except Exception as e:
+            self.ax8.text(0.5, 0.5, 'Ошибка', ha='center', va='center')
+        
+        self.figure8.tight_layout()
+        path8 = "temp_chart_8.png"
+        self.figure8.savefig(path8, format='png', dpi=150, bbox_inches='tight')
+        self.chart_paths['graph8'] = path8
+        self.canvas8.draw()
+
+        # ===== ГРАФИК 9. Затраты по кварталам =====
+        self.ax9.clear()
+        try:
+            if not purchases_df.empty and 'quarter_str' in purchases_df.columns:
+                expenses_q = purchases_df.groupby('quarter_str')['purchase_amount_with_vat'].sum().reset_index()
+                if not expenses_q.empty and expenses_q['purchase_amount_with_vat'].sum() != 0:
+                    colors = plt.cm.Reds(np.linspace(0.3, 0.8, len(expenses_q)))
+                    x_pos = range(len(expenses_q))
+                    bars = self.ax9.bar(x_pos, expenses_q['purchase_amount_with_vat'], color=colors)
+                    self.ax9.set_title('График 9. Затраты по кварталам (все налоги и закупки)', fontsize=14)
+                    self.ax9.set_ylabel('Сумма затрат, ₽')
+                    self.ax9.set_xticks(x_pos)
+                    self.ax9.set_xticklabels(expenses_q['quarter_str'])
+                    self.ax9.grid(True, alpha=0.3, axis='y')
+                    for bar in bars:
+                        height = bar.get_height()
+                        if height > 0:
+                            self.ax9.text(bar.get_x() + bar.get_width()/2., height,
+                                        f'{height:,.0f}'.replace(",", " "),
+                                        ha='center', va='bottom', fontsize=9)
+                else:
+                    self.ax9.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+            else:
+                self.ax9.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+        except Exception as e:
+            self.ax9.text(0.5, 0.5, 'Ошибка', ha='center', va='center')
+        
+        self.figure9.tight_layout()
+        path9 = "temp_chart_9.png"
+        self.figure9.savefig(path9, format='png', dpi=150, bbox_inches='tight')
+        self.chart_paths['graph9'] = path9
+        self.canvas9.draw()
+    
+    
+    #===============================================================
+    # """Открывает папку, содержащую указанный файл"""
+    def open_containing_folder(self, file_path):
+        """Открывает папку, содержащую указанный файл"""
+        try:
+            folder_path = os.path.dirname(file_path)
+            if os.path.exists(folder_path):
+                if sys.platform == 'win32':
+                    os.startfile(folder_path)
+                elif sys.platform == 'darwin':  # macOS
+                    import subprocess
+                    subprocess.run(['open', folder_path])
+                else:  # Linux
+                    import subprocess
+                    subprocess.run(['xdg-open', folder_path])
+        except Exception as e:
+            print(f"Не удалось открыть папку: {e}")
+
 
 
     #=====================================================================
@@ -2027,57 +2171,86 @@ class MainWindow(QMainWindow):
     #========================================================================================
     # ==================== ЭКСПОРТ В PDF ====================
     def export_to_pdf(self):
+        """print(f"chart_paths в PDF: {self.chart_paths if hasattr(self, 'chart_paths') else 'None'}")
+        if hasattr(self, 'chart_paths'):
+            for key, path in self.chart_paths.items():
+                print(f"{key}: {path} exists: {os.path.exists(path)}") """
+
+        """Экспорт отчета в PDF с отдельными графиками"""
         if self.current_df is None or self.current_df.empty:
             QMessageBox.warning(self, "Предупреждение", "Нет данных для экспорта")
             return
 
         file_path, _ = QFileDialog.getSaveFileName(
             self, "Сохранить как PDF",
-            os.path.join(self.save_folder, "отчет_buh_tuund.pdf") if self.save_folder else "отчет_buh_tuund.pdf",
+            os.path.join(self.save_folder, f"отчет_buh_tuund_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf") 
+            if self.save_folder else f"отчет_buh_tuund_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
             "PDF Files (*.pdf)"
         )
         if not file_path:
             return
 
         try:
+            from reportlab.lib import colors
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+            from reportlab.lib.units import cm
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+
+            # Регистрация шрифта
             try:
                 pdfmetrics.registerFont(TTFont('Arial', 'arial.ttf'))
                 font_available = True
             except:
                 font_available = False
 
-            doc = SimpleDocTemplate(file_path, pagesize=A4)
+            doc = SimpleDocTemplate(file_path, pagesize=A4,
+                                    leftMargin=2*cm, rightMargin=2*cm,
+                                    topMargin=2*cm, bottomMargin=2*cm)
             elements = []
             styles = getSampleStyleSheet()
-
-            # Добавляем логотип
-            if os.path.exists("logo.png"):
-                logo = Image("logo.png", width=50, height=50)
-                logo.hAlign = TA_CENTER
-                elements.append(logo)
-                elements.append(Spacer(1, 10))
 
             if font_available:
                 for style_name in styles.byName:
                     styles[style_name].fontName = 'Arial'
 
+            # Стили
+            title_style = ParagraphStyle(
+                'CustomTitle',
+                parent=styles['Heading1'],
+                fontName='Arial' if font_available else styles['Heading1'].fontName,
+                fontSize=20,
+                alignment=TA_CENTER,
+                spaceAfter=20,
+                textColor=colors.HexColor('#2c3e50')
+            )
+
+            subtitle_style = ParagraphStyle(
+                'Subtitle',
+                parent=styles['Heading2'],
+                fontName='Arial' if font_available else styles['Heading2'].fontName,
+                fontSize=14,
+                alignment=TA_LEFT,
+                spaceAfter=10,
+                textColor=colors.HexColor('#34495e')
+            )
+
+            # Получаем название компании
             company_name = "Неизвестная компания"
             if not self.current_df.empty and 'company' in self.current_df.columns:
                 unique_companies = self.current_df['company'].dropna().unique()
                 if len(unique_companies) > 0:
                     company_name = unique_companies[0]
 
-            title_style = ParagraphStyle(
-                'CustomTitle',
-                parent=styles['Heading1'],
-                fontName='Arial' if font_available else styles['Heading1'].fontName,
-                fontSize=16,
-                alignment=TA_CENTER,
-                spaceAfter=20,
-                textColor=colors.HexColor('#2c3e50')
-            )
-            elements.append(Paragraph(f"БУХГАЛТЕРСКИЙ ОТЧЕТ<br/>{company_name}", title_style))
+            # ===== ТИТУЛЬНЫЙ ЛИСТ =====
+            elements.append(Paragraph(f"БУХГАЛТЕРСКИЙ ОТЧЕТ", title_style))
+            elements.append(Paragraph(f"{company_name}", title_style))
+            elements.append(Spacer(1, 10))
 
+            # Информация о периоде
             period_str = "не определен"
             if not self.current_df.empty and 'period_start' in self.current_df.columns and 'period_end' in self.current_df.columns:
                 try:
@@ -2089,83 +2262,220 @@ class MainWindow(QMainWindow):
                 except:
                     period_str = f"с {start_min} по {end_max}"
 
-            info_text = f"Дата формирования: {datetime.now().strftime('%d.%m.%Y %H:%M')} | Записей: {len(self.current_df)}"
-            elements.append(Paragraph(info_text, styles['Normal']))
+            elements.append(Paragraph(f"Дата формирования: {datetime.now().strftime('%d.%m.%Y %H:%M')}", styles['Normal']))
             elements.append(Paragraph(f"Отчетный период: {period_str}", styles['Normal']))
             elements.append(Spacer(1, 20))
+            elements.append(PageBreak())
+
+            # ===== ТАБЛИЦА 1. Финансовые показатели =====
+            elements.append(Paragraph("Таблица 1. Основные финансовые показатели", subtitle_style))
+            elements.append(Spacer(1, 5))
 
             fin = self.calculate_financials()
-            elements.append(Paragraph("<b>ФИНАНСОВЫЕ ПОКАЗАТЕЛИ</b>", styles['Heading2']))
-            elements.append(Paragraph(f"Выручка с НДС: {fin['revenue_with_vat']:,.0f} ₽", styles['Normal']))
-            elements.append(Paragraph(f"Выручка без НДС: {fin['revenue_without_vat']:,.0f} ₽", styles['Normal']))
-            elements.append(Paragraph(f"Затраты с НДС: {fin['expenses_with_vat']:,.0f} ₽", styles['Normal']))
-            elements.append(Paragraph(f"Затраты без НДС: {fin['expenses_without_vat']:,.0f} ₽", styles['Normal']))
-            elements.append(Paragraph(f"Валовая прибыль (с НДС): {fin['gross_profit_with_vat']:,.0f} ₽", styles['Normal']))
-            elements.append(Paragraph(f"Прибыль без НДС: {fin['profit_without_vat']:,.0f} ₽", styles['Normal']))
-            elements.append(Paragraph(f"Норма прибыли: {fin['profit_margin']:.2f}%", styles['Normal']))
-            elements.append(Paragraph(f"НДС продажи: {fin['vat_sales']:,.0f} ₽", styles['Normal']))
-            elements.append(Paragraph(f"НДС покупки: {fin['vat_purchases']:,.0f} ₽", styles['Normal']))
-            elements.append(Paragraph(f"НДС в бюджет: {fin['vat_to_budget_net']:,.0f} ₽", styles['Normal']))
-            elements.append(Paragraph(f"Налог на прибыль (25%): {fin['profit_tax']:,.0f} ₽", styles['Normal']))
+            
+            table_data = [
+                ['Наименование показателя', 'Значение'],
+                ['Выручка с НДС', f"{fin['revenue_with_vat']:,.0f} ₽".replace(",", " ")],
+                ['Выручка без НДС', f"{fin['revenue_without_vat']:,.0f} ₽".replace(",", " ")],
+                ['Затраты с НДС', f"{fin['expenses_with_vat']:,.0f} ₽".replace(",", " ")],
+                ['Затраты без НДС', f"{fin['expenses_without_vat']:,.0f} ₽".replace(",", " ")],
+                ['Валовая прибыль (с НДС)', f"{fin['gross_profit_with_vat']:,.0f} ₽".replace(",", " ")],
+                ['Прибыль без НДС', f"{fin['profit_without_vat']:,.0f} ₽".replace(",", " ")],
+                ['Норма прибыли', f"{fin['profit_margin']:.2f}%"],
+                ['НДС продажи', f"{fin['vat_sales']:,.0f} ₽".replace(",", " ")],
+                ['НДС покупки', f"{fin['vat_purchases']:,.0f} ₽".replace(",", " ")],
+                ['НДС в бюджет', f"{fin['vat_to_budget_net']:,.0f} ₽".replace(",", " ")],
+                ['Налог на прибыль (25%)', f"{fin['profit_tax']:,.0f} ₽".replace(",", " ")]
+            ]
+
+            table = Table(table_data, colWidths=[250, 150])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('ALIGN', (1, 1), (1, -1), 'RIGHT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Arial' if font_available else 'Helvetica-Bold'),
+                ('FONTNAME', (0, 1), (-1, -1), 'Arial' if font_available else 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, 0), 12),
+                ('FONTSIZE', (0, 1), (-1, -1), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ]))
+            elements.append(table)
             elements.append(Spacer(1, 20))
+            # elements.append(PageBreak())
 
-            # ===========================================
-            chart_path = "temp_chart.png"
-            self.figure.savefig(chart_path, format='png', dpi=150, bbox_inches='tight')
-            elements.append(Paragraph("Визуализация данных:", styles['Heading2']))
-            elements.append(Image(chart_path, width=400, height=300))
-            elements.append(Spacer(1, 20))
-           
-            # ===========================================
-            # После основного графика
-            # После основного графика (self.figure)
-            elements.append(Paragraph("Дополнительные графики (часть 1):", styles['Heading2']))
-            elements.append(Image(self.chart_path2, width=500, height=400))
-            elements.append(Spacer(1, 20))
+            # ===== ВСЕ 9 ГРАФИКОВ - ПО 2 НА СТРАНИЦУ =====
+            if hasattr(self, 'chart_paths'):
+                # Страница 1: Графики 1-2
+                elements.append(Paragraph("График 1. Распределение прибыли по товарным группам", subtitle_style))
+                if 'graph1' in self.chart_paths and os.path.exists(self.chart_paths['graph1']):
+                    elements.append(Image(self.chart_paths['graph1'], width=500, height=350))
+                elements.append(Spacer(1, 20))
+                
+                elements.append(Paragraph("График 2. ТОП-5 товаров по прибыльности", subtitle_style))
+                if 'graph2' in self.chart_paths and os.path.exists(self.chart_paths['graph2']):
+                    elements.append(Image(self.chart_paths['graph2'], width=500, height=350))
+                elements.append(Spacer(1, 20))
+                # elements.append(PageBreak())
+                
+                # Страница 2: Графики 3-4
+                elements.append(Paragraph("График 3. Закупки с НДС по кварталам", subtitle_style))
+                if 'graph3' in self.chart_paths and os.path.exists(self.chart_paths['graph3']):
+                    elements.append(Image(self.chart_paths['graph3'], width=500, height=350))
+                elements.append(Spacer(1, 20))
+                
+                elements.append(Paragraph("График 4. Выручка с НДС по кварталам", subtitle_style))
+                if 'graph4' in self.chart_paths and os.path.exists(self.chart_paths['graph4']):
+                    elements.append(Image(self.chart_paths['graph4'], width=500, height=350))
+                elements.append(Spacer(1, 20))
+                # elements.append(PageBreak())
+                
+                # Страница 3: Графики 5-6
+                elements.append(Paragraph("График 5. НДС в бюджет по кварталам", subtitle_style))
+                if 'graph5' in self.chart_paths and os.path.exists(self.chart_paths['graph5']):
+                    elements.append(Image(self.chart_paths['graph5'], width=500, height=350))
+                elements.append(Spacer(1, 20))
+                
+                elements.append(Paragraph("График 6. НДС по выручке по кварталам", subtitle_style))
+                if 'graph6' in self.chart_paths and os.path.exists(self.chart_paths['graph6']):
+                    elements.append(Image(self.chart_paths['graph6'], width=500, height=350))
+                elements.append(Spacer(1, 20))
+                # elements.append(PageBreak())
+                
+                # Страница 4: Графики 7-8
+                elements.append(Paragraph("График 7. НДС по затратам по кварталам", subtitle_style))
+                if 'graph7' in self.chart_paths and os.path.exists(self.chart_paths['graph7']):
+                    elements.append(Image(self.chart_paths['graph7'], width=500, height=350))
+                elements.append(Spacer(1, 20))
+                
+                elements.append(Paragraph("График 8. Валовая прибыль по кварталам", subtitle_style))
+                if 'graph8' in self.chart_paths and os.path.exists(self.chart_paths['graph8']):
+                    elements.append(Image(self.chart_paths['graph8'], width=500, height=350))
+                elements.append(Spacer(1, 20))
+                # elements.append(PageBreak())
+                
+                # Страница 5: График 9
+                elements.append(Paragraph("График 9. Затраты по кварталам (все налоги и закупки)", subtitle_style))
+                if 'graph9' in self.chart_paths and os.path.exists(self.chart_paths['graph9']):
+                    elements.append(Image(self.chart_paths['graph9'], width=500, height=350))
+                elements.append(Spacer(1, 20))
+                elements.append(PageBreak())
 
-            elements.append(Paragraph("Дополнительные графики (часть 2):", styles['Heading2']))
-            elements.append(Image(self.chart_path3, width=500, height=300))
-            elements.append(Spacer(1, 20))
+            # ===== ТАБЛИЦА 2. Детальные данные =====
+            elements.append(Paragraph("Таблица 2. Детальные данные (первые 15 записей)", subtitle_style))
+            elements.append(Spacer(1, 5))
 
-
-
-            elements.append(Paragraph("Данные отчета (первые 20 записей):", styles['Heading2']))
-            table_data = [['Период', 'Компания', 'Контрагент', 'Выручка с НДС', 'НДС продажи', 'Прибыль']]
-            for _, row in self.current_df.head(20).iterrows():
-                counterparty = row.get('buyer', '') or row.get('seller', '') or row.get('nomenclature', '')
+            # Подготовка данных для таблицы
+            table_data = [['Период', 'Компания', 'Контрагент', 'Выручка с НДС', 'НДС', 'Прибыль']]
+            for _, row in self.current_df.head(15).iterrows():
+                # Контрагент
+                counterparty = str(row.get('buyer', '') or row.get('seller', '') or row.get('nomenclature', ''))
+                if not counterparty or counterparty == 'nan':
+                    counterparty = '—'
+                
+                # Прибыль
                 profit = row.get('net_profit', 0)
-                period_str = row.get('period_start', '')
-                if period_str and isinstance(period_str, str):
+                if pd.isna(profit):
+                    profit = 0
+                
+                # Период
+                period_str = str(row.get('period_start', ''))
+                if period_str and period_str != 'nan':
                     try:
                         dt = datetime.strptime(period_str, "%Y-%m-%d")
                         period_str = dt.strftime("%m.%Y")
                     except:
-                        pass
+                        period_str = period_str[:7] if len(period_str) >= 7 else '—'
+                else:
+                    period_str = '—'
+                
+                # Компания
+                company_str = str(row.get('company', ''))
+                if not company_str or company_str == 'nan':
+                    company_str = '—'
+                
+                # Выручка
+                revenue_val = row.get('sales_amount_with_vat', 0)
+                if pd.isna(revenue_val):
+                    revenue_val = 0
+                
+                # НДС
+                vat_val = row.get('vat_to_budget', 0)
+                if pd.isna(vat_val):
+                    vat_val = 0
+                
                 table_data.append([
-                    period_str,
-                    str(row.get('company', ''))[:20],
-                    counterparty[:20],
-                    f"{row.get('sales_amount_with_vat', 0):,.0f} ₽".replace(",", " "),
-                    f"{row.get('vat_to_budget', 0):,.0f} ₽".replace(",", " "),
+                    period_str[:10],
+                    company_str[:20],
+                    counterparty[:25],
+                    f"{revenue_val:,.0f} ₽".replace(",", " "),
+                    f"{vat_val:,.0f} ₽".replace(",", " "),
                     f"{profit:,.0f} ₽".replace(",", " ")
                 ])
 
-            table = Table(table_data)
-            table.setStyle(TableStyle([
+            table2 = Table(table_data, colWidths=[60, 100, 120, 80, 70, 80])
+            table2.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Arial' if font_available else 'Helvetica'),
+                ('ALIGN', (3, 1), (5, -1), 'RIGHT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Arial' if font_available else 'Helvetica-Bold'),
+                ('FONTNAME', (0, 1), (-1, -1), 'Arial' if font_available else 'Helvetica'),
                 ('FONTSIZE', (0, 0), (-1, 0), 10),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
                 ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
                 ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                ('FONTSIZE', (0, 1), (-1, -1), 8),
-                ('FONTNAME', (0, 1), (-1, -1), 'Arial' if font_available else 'Helvetica'),
             ]))
-            elements.append(table)
+            elements.append(table2)
+            elements.append(Spacer(1, 20))
+            elements.append(PageBreak())
+
+            # ===== АНАЛИЗ И ВЫВОДЫ =====
+            elements.append(Paragraph("Анализ финансового состояния", subtitle_style))
+            elements.append(Spacer(1, 10))
+
+            # Генерируем текстовый анализ
+            analysis_lines = [
+                "На основе предоставленных данных можно сделать следующие выводы:",
+                "",
+                f"✓ Компания {'работает с прибылью' if fin['profit_without_vat'] > 0 else 'работает в убыток'}. " +
+                f"{'Чистая прибыль' if fin['profit_without_vat'] > 0 else 'Убыток'} без НДС составляет {abs(fin['profit_without_vat']):,.0f} ₽.",
+                "",
+                f"✓ Норма прибыли составляет {fin['profit_margin']:.2f}%. " +
+                ("Это хороший показатель." if fin['profit_margin'] > 10 else
+                "Это низкий показатель, требуется оптимизация." if fin['profit_margin'] < 5 else
+                "Это средний показатель."),
+                "",
+            ]
+
+            if fin['vat_to_budget_net'] > 0:
+                vat_percent = fin['vat_to_budget_net'] / fin['revenue_with_vat'] * 100 if fin['revenue_with_vat'] != 0 else 0
+                analysis_lines.append(f"✓ НДС к уплате в бюджет составляет {fin['vat_to_budget_net']:,.0f} ₽. Это {vat_percent:.1f}% от выручки.")
+            else:
+                analysis_lines.append(f"✓ НДС к возмещению из бюджета составляет {abs(fin['vat_to_budget_net']):,.0f} ₽.")
+            
+            tax_burden = fin['profit_tax'] / fin['revenue_with_vat'] * 100 if fin['revenue_with_vat'] != 0 else 0
+            analysis_lines.append(f"✓ Налоговая нагрузка (налог на прибыль) составляет {tax_burden:.1f}% от выручки.")
+            analysis_lines.append("")
+            analysis_lines.append("Рекомендации:")
+            
+            if fin['profit_margin'] < 5:
+                analysis_lines.append("• Необходимо проанализировать структуру затрат и найти пути их снижения.")
+            if fin['expenses_with_vat'] > fin['revenue_with_vat'] * 0.9:
+                analysis_lines.append("• Высокая доля затрат в выручке. Требуется оптимизация.")
+            if fin['vat_to_budget_net'] < 0:
+                analysis_lines.append("• Сумма НДС к возмещению значительна. Проверьте правильность оформления счетов-фактур.")
+
+            for line in analysis_lines:
+                elements.append(Paragraph(line, styles['Normal']))
+                elements.append(Spacer(1, 3))
+
             elements.append(Spacer(1, 20))
 
+            # Подпись
             footer_style = ParagraphStyle(
                 'Footer',
                 parent=styles['Italic'],
@@ -2174,62 +2484,80 @@ class MainWindow(QMainWindow):
                 alignment=TA_CENTER,
                 textColor=colors.grey
             )
-            elements.append(Paragraph("Сформировано программой BuhTuundOtchet", footer_style))
+            elements.append(Paragraph("Сформировано программой BuhTuundOtchet v7.2.0", footer_style))
 
+            # Генерация PDF
             doc.build(elements)
 
-            if os.path.exists(chart_path):
-                os.remove(chart_path)
-            # В самом конце метода, перед QMessageBox.information
-            # Удаление временных файлов графиков
-            if hasattr(self, 'chart_path2') and os.path.exists(self.chart_path2):
-                os.remove(self.chart_path2)
-            if hasattr(self, 'chart_path3') and os.path.exists(self.chart_path3):
-                os.remove(self.chart_path3)
-            if os.path.exists("temp_chart.png"):
-                os.remove("temp_chart.png")
-                
-        
+            # Удаляем временные файлы
+            if hasattr(self, 'chart_paths'):
+                for path in self.chart_paths.values():
+                    try:
+                        if os.path.exists(path):
+                            os.remove(path)
+                    except:
+                        pass
+
             QMessageBox.information(self, "Успех", f"PDF файл сохранен: {file_path}")
+            
+            # Открываем папку с сохраненным файлом
+            self.open_containing_folder(file_path)
+
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при экспорте в PDF: {str(e)}")
-
+    
     #====================================================================
     # ==================== ЭКСПОРТ В WORD ====================
     def export_to_word(self):
+        """Экспорт отчета в Word с отдельными графиками"""
         if self.current_df is None or self.current_df.empty:
             QMessageBox.warning(self, "Предупреждение", "Нет данных для экспорта")
             return
 
+        default_filename = f"отчет_buh_tuund_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
         file_path, _ = QFileDialog.getSaveFileName(
             self, "Сохранить как Word",
-            os.path.join(self.save_folder, "отчет_buh_tuund.docx") if self.save_folder else "отчет_buh_tuund.docx",
+            os.path.join(self.save_folder, default_filename) if self.save_folder else default_filename,
             "Word Files (*.docx)"
         )
         if not file_path:
             return
 
         try:
-            doc = docx.Document()
-            
-            # Добавляем логотип
-            if os.path.exists("logo.png"):
-                doc.add_picture("logo.png", width=Inches(1))
-                # Центрируем логотип
-                last_paragraph = doc.paragraphs[-1]
-                last_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            import docx
+            from docx.shared import Inches, Pt, RGBColor
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.enum.table import WD_TABLE_ALIGNMENT
 
+            doc = docx.Document()
+
+            # Настройка стилей
+            style = doc.styles['Normal']
+            style.font.name = 'Arial'
+            style.font.size = Pt(11)
+            
+            title_style = doc.styles['Title']
+            title_style.font.size = Pt(24)
+            title_style.font.bold = True
+            title_style.font.color.rgb = RGBColor(44, 62, 80)
+
+            # Получаем название компании
             company_name = "Неизвестная компания"
             if not self.current_df.empty and 'company' in self.current_df.columns:
                 unique_companies = self.current_df['company'].dropna().unique()
                 if len(unique_companies) > 0:
                     company_name = unique_companies[0]
 
-            title = doc.add_heading(f'БУХГАЛТЕРСКИЙ ОТЧЕТ {company_name}', 0)
+            # ===== ТИТУЛЬНЫЙ ЛИСТ =====
+            title = doc.add_heading('БУХГАЛТЕРСКИЙ ОТЧЕТ', 0)
             title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            company_heading = doc.add_heading(company_name, level=1)
+            company_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            doc.add_paragraph()
 
-            doc.add_paragraph(f'Дата формирования: {datetime.now().strftime("%d.%m.%Y %H:%M")}')
-
+            # Информация о периоде
             period_str = "не определен"
             if not self.current_df.empty and 'period_start' in self.current_df.columns and 'period_end' in self.current_df.columns:
                 try:
@@ -2240,99 +2568,253 @@ class MainWindow(QMainWindow):
                     period_str = f"с {start_dt.strftime('%d.%m.%Y')} по {end_dt.strftime('%d.%m.%Y')}"
                 except:
                     period_str = f"с {start_min} по {end_max}"
-            doc.add_paragraph(f"Отчетный период: {period_str}")
-            doc.add_paragraph()
 
+            info_para = doc.add_paragraph()
+            info_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            info_para.add_run(f"Дата формирования: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n")
+            info_para.add_run(f"Отчетный период: {period_str}")
+
+            doc.add_paragraph()
+            doc.add_page_break()
+
+            # ===== ТАБЛИЦА 1. Финансовые показатели =====
+            doc.add_heading('Таблица 1. Основные финансовые показатели', level=2)
+            
             fin = self.calculate_financials()
-            doc.add_heading('ФИНАНСОВЫЕ ПОКАЗАТЕЛИ', level=2)
-            doc.add_paragraph(f"Выручка с НДС: {fin['revenue_with_vat']:,.0f} ₽".replace(",", " "))
-            doc.add_paragraph(f"Выручка без НДС: {fin['revenue_without_vat']:,.0f} ₽".replace(",", " "))
-            doc.add_paragraph(f"Затраты с НДС: {fin['expenses_with_vat']:,.0f} ₽".replace(",", " "))
-            doc.add_paragraph(f"Затраты без НДС: {fin['expenses_without_vat']:,.0f} ₽".replace(",", " "))
-            doc.add_paragraph(f"Валовая прибыль (с НДС): {fin['gross_profit_with_vat']:,.0f} ₽".replace(",", " "))
-            doc.add_paragraph(f"Прибыль без НДС: {fin['profit_without_vat']:,.0f} ₽".replace(",", " "))
-            doc.add_paragraph(f"Норма прибыли: {fin['profit_margin']:.2f}%")
-            doc.add_paragraph(f"НДС продажи: {fin['vat_sales']:,.0f} ₽".replace(",", " "))
-            doc.add_paragraph(f"НДС покупки: {fin['vat_purchases']:,.0f} ₽".replace(",", " "))
-            doc.add_paragraph(f"НДС в бюджет: {fin['vat_to_budget_net']:,.0f} ₽".replace(",", " "))
-            doc.add_paragraph(f"Налог на прибыль (25%): {fin['profit_tax']:,.0f} ₽".replace(",", " "))
-            doc.add_paragraph()
-
-            chart_path = "temp_chart_word.png"
-            self.figure.savefig(chart_path, format='png', dpi=150, bbox_inches='tight')
-            doc.add_heading('Визуализация данных:', level=2)
-            doc.add_picture(chart_path, width=Inches(6))
-            doc.add_paragraph()
-
-            # После основного графика
-            doc.add_heading('Дополнительные графики (часть 1):', level=2)
-            doc.add_picture(self.chart_path2, width=Inches(6))
-            doc.add_paragraph()
-
-            doc.add_heading('Дополнительные графики (часть 2):', level=2)
-            doc.add_picture(self.chart_path3, width=Inches(6))
-            doc.add_paragraph()
-
-
-            doc.add_heading('Данные отчета (первые 15 записей):', level=2)
-
-            table = doc.add_table(rows=1, cols=6)
+            
+            table = doc.add_table(rows=12, cols=2)
             table.style = 'LightShading-Accent1'
+            table.alignment = WD_TABLE_ALIGNMENT.CENTER
+            
+            # Заголовки
             hdr_cells = table.rows[0].cells
-            hdr_cells[0].text = 'Период'
-            hdr_cells[1].text = 'Компания'
-            hdr_cells[2].text = 'Контрагент'
-            hdr_cells[3].text = 'Выручка с НДС'
-            hdr_cells[4].text = 'НДС продажи'
-            hdr_cells[5].text = 'Прибыль без НДС'
-
+            hdr_cells[0].text = 'Наименование показателя'
+            hdr_cells[1].text = 'Значение'
+            
             for cell in hdr_cells:
                 for paragraph in cell.paragraphs:
                     for run in paragraph.runs:
                         run.font.bold = True
+                        run.font.size = Pt(12)
 
+            # Данные
+            data = [
+                ('Выручка с НДС', f"{fin['revenue_with_vat']:,.0f} ₽"),
+                ('Выручка без НДС', f"{fin['revenue_without_vat']:,.0f} ₽"),
+                ('Затраты с НДС', f"{fin['expenses_with_vat']:,.0f} ₽"),
+                ('Затраты без НДС', f"{fin['expenses_without_vat']:,.0f} ₽"),
+                ('Валовая прибыль (с НДС)', f"{fin['gross_profit_with_vat']:,.0f} ₽"),
+                ('Прибыль без НДС', f"{fin['profit_without_vat']:,.0f} ₽"),
+                ('Норма прибыли', f"{fin['profit_margin']:.2f}%"),
+                ('НДС продажи', f"{fin['vat_sales']:,.0f} ₽"),
+                ('НДС покупки', f"{fin['vat_purchases']:,.0f} ₽"),
+                ('НДС в бюджет', f"{fin['vat_to_budget_net']:,.0f} ₽"),
+                ('Налог на прибыль (25%)', f"{fin['profit_tax']:,.0f} ₽")
+            ]
+
+            for i, (label, value) in enumerate(data, 1):
+                cells = table.rows[i].cells
+                cells[0].text = label
+                cells[1].text = value.replace(",", " ")
+                for paragraph in cells[1].paragraphs:
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+
+            doc.add_paragraph()
+            doc.add_page_break()
+
+            #---------------------------------------------------------------------------------------
+            # ===== ВСЕ 9 ГРАФИКОВ - по 2 шт НА ОТДЕЛЬНОЙ СТРАНИЦЕ =====
+            if hasattr(self, 'chart_paths'):
+                # Страница 1: Графики 1-2
+                doc.add_heading('График 1. Распределение прибыли по товарным группам', level=2)
+                if 'graph1' in self.chart_paths and os.path.exists(self.chart_paths['graph1']):
+                    doc.add_picture(self.chart_paths['graph1'], width=Inches(6.5))  # Растянули
+                doc.add_paragraph()
+                
+                doc.add_heading('График 2. ТОП-5 товаров по прибыльности', level=2)
+                if 'graph2' in self.chart_paths and os.path.exists(self.chart_paths['graph2']):
+                    doc.add_picture(self.chart_paths['graph2'], width=Inches(6.5))
+                doc.add_paragraph()
+                doc.add_page_break()
+                
+                # Страница 2: Графики 3-4
+                doc.add_heading('График 3. Закупки с НДС по кварталам', level=2)
+                if 'graph3' in self.chart_paths and os.path.exists(self.chart_paths['graph3']):
+                    doc.add_picture(self.chart_paths['graph3'], width=Inches(6.5))
+                doc.add_paragraph()
+                
+                doc.add_heading('График 4. Выручка с НДС по кварталам', level=2)
+                if 'graph4' in self.chart_paths and os.path.exists(self.chart_paths['graph4']):
+                    doc.add_picture(self.chart_paths['graph4'], width=Inches(6.5))
+                doc.add_paragraph()
+                doc.add_page_break()
+                
+                # Страница 3: Графики 5-6
+                doc.add_heading('График 5. НДС в бюджет по кварталам', level=2)
+                if 'graph5' in self.chart_paths and os.path.exists(self.chart_paths['graph5']):
+                    doc.add_picture(self.chart_paths['graph5'], width=Inches(6.5))
+                doc.add_paragraph()
+                
+                doc.add_heading('График 6. НДС по выручке по кварталам', level=2)
+                if 'graph6' in self.chart_paths and os.path.exists(self.chart_paths['graph6']):
+                    doc.add_picture(self.chart_paths['graph6'], width=Inches(6.5))
+                doc.add_paragraph()
+                doc.add_page_break()
+                
+                # Страница 4: Графики 7-8
+                doc.add_heading('График 7. НДС по затратам по кварталам', level=2)
+                if 'graph7' in self.chart_paths and os.path.exists(self.chart_paths['graph7']):
+                    doc.add_picture(self.chart_paths['graph7'], width=Inches(6.5))
+                doc.add_paragraph()
+                
+                doc.add_heading('График 8. Валовая прибыль по кварталам', level=2)
+                if 'graph8' in self.chart_paths and os.path.exists(self.chart_paths['graph8']):
+                    doc.add_picture(self.chart_paths['graph8'], width=Inches(6.5))
+                doc.add_paragraph()
+                doc.add_page_break()
+                
+                # Страница 5: График 9
+                doc.add_heading('График 9. Затраты по кварталам (все налоги и закупки)', level=2)
+                if 'graph9' in self.chart_paths and os.path.exists(self.chart_paths['graph9']):
+                    doc.add_picture(self.chart_paths['graph9'], width=Inches(6.5))
+                doc.add_paragraph()
+                doc.add_page_break()
+
+            # ===== ТАБЛИЦА 2. Детальные данные =====
+            doc.add_heading('Таблица 2. Детальные данные (первые 15 записей)', level=2)
+
+            table2 = doc.add_table(rows=1, cols=6)
+            table2.style = 'LightShading-Accent1'
+            
+            # Заголовки
+            hdr_cells2 = table2.rows[0].cells
+            headers = ['Период', 'Компания', 'Контрагент', 'Выручка с НДС', 'НДС', 'Прибыль']
+            for i, header in enumerate(headers):
+                hdr_cells2[i].text = header
+                for paragraph in hdr_cells2[i].paragraphs:
+                    for run in paragraph.runs:
+                        run.font.bold = True
+
+            # Данные
             for _, row in self.current_df.head(15).iterrows():
-                cells = table.add_row().cells
+                cells = table2.add_row().cells
+                
+                # Период
                 period_str = row.get('period_start', '')
-                if period_str and isinstance(period_str, str):
+                if period_str and isinstance(period_str, str) and period_str != 'nan':
                     try:
                         dt = datetime.strptime(period_str, "%Y-%m-%d")
                         period_str = dt.strftime("%m.%Y")
                     except:
-                        pass
+                        period_str = period_str[:7] if len(period_str) >= 7 else '-'
+                else:
+                    period_str = '-'
                 cells[0].text = str(period_str)
-                cells[1].text = str(row.get('company', ''))[:30]
+                
+                # Компания
+                company_val = row.get('company', '')
+                if company_val and company_val != 'nan':
+                    cells[1].text = str(company_val)[:20]
+                else:
+                    cells[1].text = '-'
+                
+                # Контрагент
                 counterparty = row.get('buyer', '') or row.get('seller', '') or row.get('nomenclature', '')
-                cells[2].text = counterparty[:30]
-                cells[3].text = f"{row.get('sales_amount_with_vat', 0):,.0f} ₽".replace(",", " ")
-                cells[4].text = f"{row.get('vat_to_budget', 0):,.0f} ₽".replace(",", " ")
-                cells[5].text = f"{row.get('net_profit', 0):,.0f} ₽".replace(",", " ")
+                if counterparty and counterparty != 'nan':
+                    cells[2].text = str(counterparty)[:25]
+                else:
+                    cells[2].text = '-'
+                
+                # Выручка
+                revenue = row.get('sales_amount_with_vat', 0)
+                if pd.isna(revenue):
+                    revenue = 0
+                cells[3].text = f"{revenue:,.0f} ₽".replace(",", " ")
+                cells[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                
+                # НДС
+                vat = row.get('vat_to_budget', 0)
+                if pd.isna(vat):
+                    vat = 0
+                cells[4].text = f"{vat:,.0f} ₽".replace(",", " ")
+                cells[4].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                
+                # Прибыль
+                profit = row.get('net_profit', 0)
+                if pd.isna(profit):
+                    profit = 0
+                cells[5].text = f"{profit:,.0f} ₽".replace(",", " ")
+                cells[5].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+
+            doc.add_paragraph()
+            doc.add_page_break()
+
+            # ===== АНАЛИЗ И ВЫВОДЫ =====
+            doc.add_heading('Анализ финансового состояния', level=2)
+
+            analysis_para = doc.add_paragraph()
+            analysis_para.add_run('На основе предоставленных данных можно сделать следующие выводы:\n\n').bold = True
+
+            if fin['profit_without_vat'] > 0:
+                analysis_para.add_run(f'✓ Компания работает с прибылью. Чистая прибыль без НДС составляет {fin["profit_without_vat"]:,.0f} ₽.\n'.replace(",", " "))
+            else:
+                analysis_para.add_run(f'✗ Компания работает в убыток. Убыток без НДС составляет {abs(fin["profit_without_vat"]):,.0f} ₽.\n'.replace(",", " "))
+
+            margin_text = f'✓ Норма прибыли составляет {fin["profit_margin"]:.2f}%. '
+            if fin['profit_margin'] > 10:
+                margin_text += 'Это хороший показатель.'
+            elif fin['profit_margin'] < 5:
+                margin_text += 'Это низкий показатель, требуется оптимизация.'
+            else:
+                margin_text += 'Это средний показатель.'
+            analysis_para.add_run(margin_text + '\n')
+
+            if fin['vat_to_budget_net'] > 0:
+                vat_percent = fin['vat_to_budget_net'] / fin['revenue_with_vat'] * 100 if fin['revenue_with_vat'] != 0 else 0
+                analysis_para.add_run(f'✓ НДС к уплате в бюджет составляет {fin["vat_to_budget_net"]:,.0f} ₽. '.replace(",", " "))
+                analysis_para.add_run(f'Это {vat_percent:.1f}% от выручки.\n')
+            else:
+                analysis_para.add_run(f'✓ НДС к возмещению из бюджета составляет {abs(fin["vat_to_budget_net"]):,.0f} ₽.\n'.replace(",", " "))
+
+            tax_burden = fin['profit_tax'] / fin['revenue_with_vat'] * 100 if fin['revenue_with_vat'] != 0 else 0
+            analysis_para.add_run(f'✓ Налоговая нагрузка (налог на прибыль) составляет {tax_burden:.1f}% от выручки.\n\n')
+
+            analysis_para.add_run('Рекомендации:\n').bold = True
+            if fin['profit_margin'] < 5:
+                analysis_para.add_run('• Необходимо проанализировать структуру затрат и найти пути их снижения.\n')
+            if fin['expenses_with_vat'] > fin['revenue_with_vat'] * 0.9:
+                analysis_para.add_run('• Высокая доля затрат в выручке. Требуется оптимизация.\n')
+            if fin['vat_to_budget_net'] < 0:
+                analysis_para.add_run('• Сумма НДС к возмещению значительна. Проверьте правильность оформления счетов-фактур.\n')
 
             doc.add_paragraph()
 
-            footer = doc.add_paragraph('Сформировано программой BuhTuundOtchet v7.0.1')
+            # ===== ПОДПИСЬ =====
+            footer = doc.add_paragraph()
             footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            footer.italic = True
+            footer.add_run('Сформировано программой BuhTuundOtchet v7.2.0').italic = True
 
+            # ===== СОХРАНЕНИЕ ДОКУМЕНТА =====
             doc.save(file_path)
 
-            if os.path.exists(chart_path):
-                os.remove(chart_path)
-
-
-            # В самом конце метода, перед QMessageBox.information
-            # Удаление временных файлов графиков
-            if hasattr(self, 'chart_path2') and os.path.exists(self.chart_path2):
-                os.remove(self.chart_path2)
-            if hasattr(self, 'chart_path3') and os.path.exists(self.chart_path3):
-                os.remove(self.chart_path3)
-            if os.path.exists("temp_chart_word.png"):
-                os.remove("temp_chart_word.png")
+            # ===== УДАЛЕНИЕ ВРЕМЕННЫХ ФАЙЛОВ =====
+            if hasattr(self, 'chart_paths'):
+                for path in self.chart_paths.values():
+                    try:
+                        if os.path.exists(path):
+                            os.remove(path)
+                    except:
+                        pass
 
             QMessageBox.information(self, "Успех", f"Word файл сохранен: {file_path}")
+            
+            # Открываем папку с сохраненным файлом
+            self.open_containing_folder(file_path)
+
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при экспорте в Word: {str(e)}")
 
+    #=====================================================================================
     # ==================== БЫСТРЫЙ ОТЧЕТ ====================
     def generate_quick_report(self):
         if self.current_df is None or self.current_df.empty:
@@ -2492,7 +2974,7 @@ class MainWindow(QMainWindow):
         
         # Текст о программе
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v7.1.0</p>
+        <p><b>Версия программы:</b> v7.2.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
