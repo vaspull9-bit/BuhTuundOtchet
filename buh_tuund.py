@@ -1,5 +1,5 @@
 #======================================================================
-# BuhTuundOtchet v7.2.0 - Доработка отчетов есть длч КН ПОК и ПРОД
+# BuhTuundOtchet v7.3.0 - Доработка сохранения БД
 import sys
 import os
 import sqlite3
@@ -198,6 +198,7 @@ class MainWindow(QMainWindow):
         
         self.init_ui()
         self.load_last_database()
+        self.load_last_folder()         # загружаем последнюю папку
 
     # ==================== НАСТРОЙКИ ====================
     def load_settings(self):
@@ -278,26 +279,73 @@ class MainWindow(QMainWindow):
         self.db_save_folder = self.db_save_folder_edit.text()
         self.save_settings()
         dialog.accept()
-
+    #==================================================================================
     # ==================== ЗАГРУЗКА ПОСЛЕДНЕЙ БД ====================
     def load_last_database(self):
+        """Загружает последнюю использованную базу данных при старте"""
         last_db = self.settings.value("last_database", "")
-        if last_db and os.path.exists(last_db):
-            try:
-                self.db.conn.close()
-                self.db = DatabaseManager(db_path=last_db)
-                self.current_df = self.db.get_all_data()
-                self.display_data(self.current_df)
-                self.update_summary()
-                self.update_charts()
-                self.update_filter_combos()
-                print(f"Загружена последняя БД: {last_db}")
-            except Exception as e:
-                print(f"Не удалось загрузить последнюю БД: {e}")
+        
+        # Если последняя БД не существует или была удалена
+        if not last_db or not os.path.exists(last_db):
+            # Создаем новую БД по умолчанию
+            self.db = DatabaseManager()
+            self.current_df = pd.DataFrame()
+            self.display_data(self.current_df)
+            self.update_summary()
+            self.update_charts()
+            self.update_filter_combos()
+            print("Создана новая база данных по умолчанию")
+            return
+        
+        try:
+            self.db.conn.close()
+            self.db = DatabaseManager(db_path=last_db)
+            self.current_df = self.db.get_all_data()
+            self.display_data(self.current_df)
+            self.update_summary()
+            self.update_charts()
+            self.update_filter_combos()
+            print(f"Загружена последняя БД: {last_db}")
+        except Exception as e:
+            print(f"Не удалось загрузить последнюю БД: {e}")
+            # В случае ошибки создаем новую БД
+            self.db = DatabaseManager()
+            self.current_df = pd.DataFrame()
+            self.display_data(self.current_df)
+            self.update_summary()
+            self.update_charts()
+            self.update_filter_combos()
+
+    # ====================================================================================
+    # """Загружает последнюю использованную папку в дерево файлов"""
+    def load_last_folder(self):
+        """Загружает последнюю использованную папку в дерево файлов"""
+        last_folder = self.settings.value("last_folder", "")
+        if last_folder and os.path.exists(last_folder):
+            self.load_folder_tree(last_folder)
+
+    # ==========================================================================================
+    # ==================== """Сохраняет настройки при закрытии программы""" ====================
+    def closeEvent(self, event):
+        """Сохраняет настройки при закрытии программы"""
+        # Сохраняем путь к текущей базе данных
+        cursor = self.db.conn.execute("PRAGMA database_list")
+        row = cursor.fetchone()
+        if row and row[2]:  # есть путь к файлу
+            self.settings.setValue("last_database", row[2])
+        
+        # Сохраняем последнюю открытую папку в дереве
+        root = self.tree_widget.topLevelItem(0)
+        if root:
+            folder_path = root.data(0, Qt.ItemDataRole.UserRole)
+            if folder_path and os.path.isdir(folder_path):
+                self.settings.setValue("last_folder", folder_path)
+        
+        event.accept()
 
     # ==================== ИНИЦИАЛИЗАЦИЯ ИНТЕРФЕЙСА ====================
     def init_ui(self):
-        self.setWindowTitle("BuhTuundOtchet v7.0.1")
+        self.setWindowTitle("BuhTuundOtchet")
         self.setGeometry(100, 100, 1400, 800)
         self.setStyleSheet("""
             QMainWindow {
@@ -737,7 +785,10 @@ class MainWindow(QMainWindow):
             self.load_folder = folder
             self.load_folder_tree(folder)
 
+    # ================================================================================
+    # """Загружает дерево файлов из папки и сохраняет путь в настройки"""
     def load_folder_tree(self, folder_path):
+        """Загружает дерево файлов из папки и сохраняет путь в настройки"""
         self.tree_widget.clear()
         root_item = QTreeWidgetItem([os.path.basename(folder_path)])
         root_item.setData(0, Qt.ItemDataRole.UserRole, folder_path)
@@ -746,7 +797,10 @@ class MainWindow(QMainWindow):
         self.tree_widget.addTopLevelItem(root_item)
         self._add_folder_contents(folder_path, root_item)
         root_item.setExpanded(True)
-
+        # Сохраняем путь к папке
+        self.settings.setValue("last_folder", folder_path)
+    
+    # ================================================================================
     def _add_folder_contents(self, path, parent_item):
         try:
             for item in sorted(os.listdir(path)):
@@ -809,12 +863,12 @@ class MainWindow(QMainWindow):
             child = item.child(i)
             child.setCheckState(0, state)
             self._set_children_checkstate(child, state)
-
+    #================================================================================
     # ==================== РАБОТА С БАЗОЙ ДАННЫХ ====================
     def clear_database(self):
         reply = QMessageBox.question(self, "Подтверждение",
-                                      "Вы действительно хотите удалить все данные из базы?",
-                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                                    "Вы действительно хотите удалить все данные из базы?",
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
             cursor = self.db.conn.cursor()
             cursor.execute("DELETE FROM reports")
@@ -825,9 +879,16 @@ class MainWindow(QMainWindow):
             self.update_summary()
             self.update_charts()
             self.update_filter_combos()
+            
+            # При очистке базы удаляем запись о последней БД (будет создана новая при закрытии)
+            self.settings.remove("last_database")
+            
             QMessageBox.information(self, "Готово", "База данных очищена")
 
+    # ===============================================================================
+    # """Загружает базу данных из выбранного файла .db."""
     def load_database(self):
+        """Загружает базу данных из выбранного файла .db."""
         start_dir = self.db_load_folder if self.db_load_folder else ""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -846,6 +907,7 @@ class MainWindow(QMainWindow):
             self.update_summary()
             self.update_charts()
             self.update_filter_combos()
+            # Сохраняем путь как последнюю БД
             self.settings.setValue("last_database", file_path)
             QMessageBox.information(self, "Успех", f"База данных загружена из {file_path}")
         except Exception as e:
@@ -854,6 +916,8 @@ class MainWindow(QMainWindow):
     def save_database(self):
         QMessageBox.information(self, "Сохранение", "Все изменения уже сохранены в текущей базе данных.")
 
+    #===================================================================
+    # ====================== Сохранить БД как.... ==========================
     def save_database_as(self):
         cursor = self.db.conn.execute("PRAGMA database_list")
         row = cursor.fetchone()
@@ -874,6 +938,7 @@ class MainWindow(QMainWindow):
 
         try:
             shutil.copy2(current_db_path, file_path)
+            # Сохраняем путь как последнюю БД
             self.settings.setValue("last_database", file_path)
             QMessageBox.information(self, "Успех", f"База данных сохранена как {file_path}")
         except Exception as e:
@@ -2484,7 +2549,7 @@ class MainWindow(QMainWindow):
                 alignment=TA_CENTER,
                 textColor=colors.grey
             )
-            elements.append(Paragraph("Сформировано программой BuhTuundOtchet v7.2.0", footer_style))
+            elements.append(Paragraph("Сформировано программой BuhTuundOtchet", footer_style))
 
             # Генерация PDF
             doc.build(elements)
@@ -2792,7 +2857,7 @@ class MainWindow(QMainWindow):
             # ===== ПОДПИСЬ =====
             footer = doc.add_paragraph()
             footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            footer.add_run('Сформировано программой BuhTuundOtchet v7.2.0').italic = True
+            footer.add_run('Сформировано программой BuhTuundOtchet').italic = True
 
             # ===== СОХРАНЕНИЕ ДОКУМЕНТА =====
             doc.save(file_path)
@@ -2974,7 +3039,7 @@ class MainWindow(QMainWindow):
         
         # Текст о программе
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v7.2.0</p>
+        <p><b>Версия программы:</b> v7.3.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
