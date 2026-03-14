@@ -1,5 +1,5 @@
 #======================================================================
-# BuhTuundOtchet v7.3.0 - Доработка сохранения БД
+# BuhTuundOtchet v7.4.0 - Разработка ОСВ41
 import sys
 import os
 import sqlite3
@@ -81,6 +81,15 @@ class DatabaseManager:
         for col, typ in new_columns.items():
             if col not in existing:
                 cursor.execute(f"ALTER TABLE reports ADD COLUMN {col} {typ}")
+        
+        # 👇👇👇 СЮДА ВСТАВЛЯЕМ НОВУЮ КОЛОНКУ 👇👇👇
+        if 'account' not in existing:
+            cursor.execute("ALTER TABLE reports ADD COLUMN account TEXT")
+        # 👆👆👆
+
+        # Добавляем колонку "article" (артикул)
+        if 'article' not in existing:
+            cursor.execute("ALTER TABLE reports ADD COLUMN article TEXT")
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS import_history (
@@ -103,8 +112,10 @@ class DatabaseManager:
             'period_start': '',
             'period_end': '',
             'doc_type': '',
+            'account': '',
             'product_group': '',
             'nomenclature': '',
+            'article': '',
             'revenue': 0.0,
             'cost_price': 0.0,
             'gross_profit': 0.0,
@@ -327,19 +338,34 @@ class MainWindow(QMainWindow):
     # ==========================================================================================
     # ==================== """Сохраняет настройки при закрытии программы""" ====================
     def closeEvent(self, event):
-        """Сохраняет настройки при закрытии программы"""
+        """Сохраняет настройки и удаляет временные файлы при закрытии программы"""
+        
         # Сохраняем путь к текущей базе данных
         cursor = self.db.conn.execute("PRAGMA database_list")
         row = cursor.fetchone()
-        if row and row[2]:  # есть путь к файлу
+        if row and row[2]:
             self.settings.setValue("last_database", row[2])
         
-        # Сохраняем последнюю открытую папку в дереве
+        # Сохраняем последнюю открытую папку
         root = self.tree_widget.topLevelItem(0)
         if root:
             folder_path = root.data(0, Qt.ItemDataRole.UserRole)
             if folder_path and os.path.isdir(folder_path):
                 self.settings.setValue("last_folder", folder_path)
+        
+        # ===== УДАЛЯЕМ ВСЕ ВРЕМЕННЫЕ ФАЙЛЫ ГРАФИКОВ =====
+        try:
+            import glob
+            # Находим все файлы temp_chart_*.png
+            for temp_file in glob.glob("temp_chart_*.png"):
+                try:
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
+                        print(f"Удален временный файл: {temp_file}")
+                except:
+                    pass
+        except Exception as e:
+            print(f"Ошибка при удалении временных файлов: {e}")
         
         event.accept()
 
@@ -1022,7 +1048,7 @@ class MainWindow(QMainWindow):
 
         self.db.save_data(df_import)
         return True
-
+    # ============================================================================
     # ==================== ОБРАБОТКА ФАЙЛОВ ====================
     def process_files(self, file_paths):
         total = len(file_paths)
@@ -1052,6 +1078,8 @@ class MainWindow(QMainWindow):
 
         if success_count > 0:
             self.current_df = self.db.get_all_data()
+            if 'account' in self.current_df.columns:
+                self.current_df['account'] = self.current_df['account'].fillna('')
             self.display_data(self.current_df)
             self.update_summary()
             self.update_charts()
@@ -1065,6 +1093,8 @@ class MainWindow(QMainWindow):
                 msg += f"\n... и ещё {len(error_files)-5} ошибок"
         QMessageBox.information(self, "Результат загрузки", msg)
 
+    # ===========================================================
+    #  Импорт эксель файла
     def _import_excel_file(self, file_path):
         print(f"Обработка файла: {os.path.basename(file_path)}")
 
@@ -1106,8 +1136,27 @@ class MainWindow(QMainWindow):
             return self.db.save_data(df)
 
         if 'оборотно-сальдовая ведомость по счету 19' in preview_text or 'анализ счета 19' in preview_text:
-            print("-> Распознан ОСВ 19")
-            df = self._parse_osv_19_detailed(file_path)
+            print("-> Распознан ОСВ 19 - ТЕСТ ПЕЧАТИ")
+            print(">>> ЭТО СООБЩЕНИЕ ДОЛЖНО ПОЯВИТЬСЯ <<<")
+            print(">>> ЕСЛИ ЕГО НЕТ - ЗНАЧИТ print НЕ РАБОТАЕТ <<<")
+            
+            # Принудительно сбрасываем буфер вывода
+            import sys
+            sys.stdout.flush()
+            
+            print("Пытаемся вызвать парсер...")
+            try:
+                df = self._parse_osv_19_detailed(file_path)
+                print("Парсер отработал")
+            except Exception as e:
+                print(f"ОШИБКА: {e}")
+                import traceback
+                traceback.print_exc()
+                df = pd.DataFrame()
+            
+            print(f"Парсер вернул DataFrame с {len(df)} записями")
+            if df.empty:
+                print("DataFrame пустой!")
             return self.db.save_data(df)
 
         if 'оборотно-сальдовая ведомость по счету 41' in preview_text:
@@ -1153,6 +1202,7 @@ class MainWindow(QMainWindow):
         return self._import_legacy(file_path)
 
     # ==================== ПАРСЕРЫ ====================
+   
     def _extract_company_by_keyword(self, df, keyword):
         for i in range(min(15, len(df))):
             row = df.iloc[i].tolist()
@@ -1238,142 +1288,458 @@ class MainWindow(QMainWindow):
             if key in month_name.lower():
                 return num
         return '01'
+    
+    
+    #==========================================================================
+    # ========== ПАРСЕР ОСВ41 ==========
 
-    # ========== КНИГА ПОКУПОК ==========
-    def _parse_purchase_book(self, file_path):
+    def _parse_osv_41_detailed(self, file_path):
+        """
+        Парсинг оборотно-сальдовой ведомости по счету 41 (Товары)
+        """
         import pandas as pd
         import re
         from datetime import datetime
 
+        print(f"Парсер ОСВ 41: начало обработки {file_path}")
         df = pd.read_excel(file_path, header=None, dtype=str)
         df = df.fillna('').astype(str).apply(lambda col: col.str.strip())
+        print(f"Прочитано строк: {len(df)}")
 
         company = "Неизвестная компания"
-        for i in range(min(10, len(df))):
-            row = df.iloc[i].tolist()
-            for j, cell in enumerate(row):
-                if 'покупатель' in cell.lower():
-                    for k in range(j+1, len(row)):
-                        if row[k].strip():
-                            company = row[k].strip()
-                            break
-                    if company != "Неизвестная компания":
-                        break
-            if company != "Неизвестная компания":
+        if len(df) > 0 and df.iloc[0, 0] and df.iloc[0, 0] != 'nan':
+            company = df.iloc[0, 0].strip()
+        print(f"ОСВ 41: компания = {company}")
+
+        period_start = "2025-01-01"
+        period_end = "2025-12-31"
+        if len(df) > 1:
+            year_match = re.search(r'(\d{4})', df.iloc[1, 0])
+            if year_match:
+                year = year_match.group(1)
+                period_start = f"{year}-01-01"
+                period_end = f"{year}-12-31"
+                print(f"ОСВ 41: год {year}")
+
+        # Находим начало данных
+        data_start = None
+        for i in range(len(df)):
+            if df.iloc[i, 0].strip() == '41':
+                data_start = i
+                print(f"ОСВ 41: данные начинаются со строки {i}")
                 break
-        print(f"Книга покупок: компания = {company}")
 
-        header_text = ' '.join(df.iloc[:20].values.flatten()).lower()
-        period_match = re.search(r'с\s+(\d{2}\.\d{2}\.\d{4})\s+по\s+(\d{2}\.\d{2}\.\d{4})', header_text, re.IGNORECASE)
-        if not period_match:
-            raise ValueError("Не найден период в книге покупок")
-        period_start = datetime.strptime(period_match.group(1), "%d.%m.%Y").strftime("%Y-%m-%d")
-        period_end = datetime.strptime(period_match.group(2), "%d.%m.%Y").strftime("%Y-%m-%d")
-
-        header_row_idx, num_to_idx = self._find_header_row_loose(df, min_required=5)
-        if header_row_idx is None:
-            header_row_idx, num_to_idx = self._find_header_row_fallback(df, min_count=8)
-            if header_row_idx is None:
-                raise ValueError("Не найдена строка с номерами колонок")
-
-        print(f"Книга покупок: строка с номерами на индексе {header_row_idx}")
-        print(f"Соответствие базовых номеров колонкам: {num_to_idx}")
-
-        required_nums = [2, 3, 8, 9, 14, 15]
-        for num in required_nums:
-            if num not in num_to_idx:
-                raise ValueError(f"Не найден номер колонки {num}")
-
-        op_col = num_to_idx[2]
-        doc_col = num_to_idx[3]
-        accept_col = num_to_idx[8]
-        seller_col = num_to_idx[9]
-        amount_col = num_to_idx[14]
-        vat_col = num_to_idx[15]
+        if data_start is None:
+            raise ValueError("Не найдена строка с '41' в ОСВ 41")
 
         records = []
-        current_seller = None
-        data_start = header_row_idx + 1
+        i = data_start
+
+        while i < len(df):
+            # Пропускаем пустые строки
+            while i < len(df) and (not df.iloc[i, 0] or df.iloc[i, 0] == 'nan'):
+                i += 1
+            if i >= len(df):
+                break
+
+            row = df.iloc[i].tolist()
+            first_cell = str(row[0]).strip().lower() if row[0] else ''
+
+            if 'итого' in first_cell:
+                print(f"ОСВ 41: итог на строке {i}")
+                break
+
+            # 1. Счет (41, 41.01)
+            if first_cell.replace('.', '').isdigit() and len(first_cell) < 10:
+                current_account = row[0].strip()
+                print(f"Счет: {current_account}")
+                i += 2  # пропускаем следующую пустую строку
+                continue
+
+            # 2. Номенклатура
+            elif first_cell[0].isdigit() and len(first_cell) > 10:
+                # Извлекаем название (без артикула в начале)
+                parts = row[0].split(' ', 1)
+                if len(parts) == 2:
+                    current_nomenclature = parts[1]
+                else:
+                    current_nomenclature = row[0]
+                
+                # Артикул из колонки 1
+                current_article = row[1].strip() if len(row) > 1 else ''
+                print(f"Номенклатура: {current_nomenclature}, Артикул: {current_article}")
+                i += 2
+                continue
+
+            # 3. Операция (Обороты за ...)
+            elif 'обороты за' in first_cell:
+                current_operation = row[0]
+                
+                # Извлекаем дату
+                date_match = re.search(r'(\d{2}\.\d{2}\.\d{2,4})', first_cell)
+                op_date = date_match.group(1) if date_match else ''
+
+                # Получаем БУ (суммы) из текущей строки
+                bu_debit = self._clean_number(row[4] if len(row) > 4 else 0)
+                bu_credit = self._clean_number(row[5] if len(row) > 5 else 0)
+
+                # Количество берем из следующей строки (она пустая в колонке 0, но данные есть)
+                if i + 1 < len(df):
+                    next_row = df.iloc[i + 1].tolist()
+                    qty_debit = self._clean_number(next_row[4] if len(next_row) > 4 else 0)
+                    qty_credit = self._clean_number(next_row[5] if len(next_row) > 5 else 0)
+
+                    # Сохраняем приход
+                    if bu_debit > 0:
+                        records.append({
+                            'company': company,
+                            'period_start': period_start,
+                            'period_end': period_end,
+                            'account': current_account,
+                            'product_group': 'ОСВ 41',
+                            'doc_type': 'osv_41',
+                            'nomenclature': current_nomenclature,
+                            'article': current_article,
+                            'seller': '',
+                            'buyer': '',
+                            'document_number': '',
+                            'document_date': op_date,
+                            'operation_code': '',
+                            'acceptance_date': '',
+                            'payment_document': current_operation,
+                            'revenue': 0.0,
+                            'cost_price': 0.0,
+                            'gross_profit': 0.0,
+                            'sales_expenses': 0.0,
+                            'other_income_expenses': 0.0,
+                            'net_profit': 0.0,
+                            'vat_deductible': 0.0,
+                            'vat_to_budget': 0.0,
+                            'purchase_amount_with_vat': bu_debit,
+                            'sales_amount_with_vat': 0.0,
+                            'sales_amount_without_vat': 0.0,
+                            'quantity': qty_debit,
+                            'import_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        })
+
+                    # Сохраняем расход
+                    if bu_credit > 0:
+                        records.append({
+                            'company': company,
+                            'period_start': period_start,
+                            'period_end': period_end,
+                            'account': current_account,
+                            'product_group': 'ОСВ 41',
+                            'doc_type': 'osv_41',
+                            'nomenclature': current_nomenclature,
+                            'article': current_article,
+                            'seller': '',
+                            'buyer': '',
+                            'document_number': '',
+                            'document_date': op_date,
+                            'operation_code': '',
+                            'acceptance_date': '',
+                            'payment_document': current_operation,
+                            'revenue': 0.0,
+                            'cost_price': bu_credit,
+                            'gross_profit': 0.0,
+                            'sales_expenses': 0.0,
+                            'other_income_expenses': 0.0,
+                            'net_profit': 0.0,
+                            'vat_deductible': 0.0,
+                            'vat_to_budget': 0.0,
+                            'purchase_amount_with_vat': 0.0,
+                            'sales_amount_with_vat': 0.0,
+                            'sales_amount_without_vat': 0.0,
+                            'quantity': qty_credit,
+                            'import_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        })
+
+                i += 2  # пропускаем строку с количеством
+                continue
+
+            # 4. Основной склад и другие - пропускаем
+            else:
+                i += 2
+                continue
+
+        if not records:
+            raise ValueError("Не найдено записей в ОСВ 41")
+
+        print(f"ОСВ 41: найдено записей — {len(records)}")
+        return pd.DataFrame(records)
+
+    #==========================================================================
+    # ========== ПАРСЕР ОСВ19 ==========
+    def _parse_osv_19_detailed(self, file_path):
+        """
+        Парсинг оборотно-сальдовой ведомости по счету 19
+        """
+        import pandas as pd
+        import re
+        from datetime import datetime
+
+        print(f"Парсер ОСВ 19: начало обработки {file_path}")
+        
+        # Просто читаем, без выебонов
+        df = pd.read_excel(file_path, header=None, dtype=str)
+        
+        # Чистим
+        df = df.fillna('').astype(str).apply(lambda col: col.str.strip())
+        # 👇 ДОБАВЛЯЕМ СЮДА
+        def fix_account_dates(val):
+            if pd.isna(val) or val == '' or val == 'nan':
+                return ''
+            s = str(val).strip()
+            if '-' in s and ' ' in s and len(s.split()) >= 2:
+                date_part = s.split()[0]
+                if '-' in date_part:
+                    parts = date_part.split('-')
+                    if len(parts) == 3:
+                        year, month, day = parts
+                        return f"{day}.{month}"
+            return s
+
+        df[0] = df[0].apply(fix_account_dates)
+        # 👆
+
+        print(f"Прочитано строк: {len(df)}")
+
+        # --- 1. Компания ---
+        company = "Неизвестная компания"
+        if len(df) > 0 and df.iloc[0, 0] and df.iloc[0, 0] != 'nan':
+            company = df.iloc[0, 0].strip()
+        print(f"ОСВ 19: компания = {company}")
+
+        # --- 2. Период ---
+        period_start = "2025-01-01"
+        period_end = "2025-12-31"
+        if len(df) > 1:
+            year_match = re.search(r'(\d{4})', df.iloc[1, 0])
+            if year_match:
+                year = year_match.group(1)
+                period_start = f"{year}-01-01"
+                period_end = f"{year}-12-31"
+                print(f"ОСВ 19: год {year}")
+
+        # --- 3. Находим начало данных ---
+        data_start = None
+        for i in range(len(df)):
+            if df.iloc[i, 0].strip() == '19':
+                data_start = i
+                print(f"ОСВ 19: данные начинаются со строки {i}")
+                break
+        
+        if data_start is None:
+            raise ValueError("Не найдена строка с '19' в ОСВ 19")
+
+                
+        # --- 4. Индексы колонок ---
+        debit_turnover_col = 3
+        credit_turnover_col = 4
+
+        # --- 5. Сбор записей ---
+        records = []
+        current_account = None
 
         for i in range(data_start, len(df)):
             row = df.iloc[i].tolist()
-            first_cell_raw = row[0] if len(row) > 0 else ''
-            first_cell = str(first_cell_raw).strip().lower() if first_cell_raw else ''
-
-            if not first_cell:
+            if len(row) == 0:
                 continue
-
-            if 'всего по продавцу' in first_cell:
-                current_seller = None
-                continue
-
-            if first_cell == 'всего' and 'по продавцу' not in first_cell:
+                
+            first_cell = str(row[0]).strip().lower() if row[0] else ''
+            
+            if 'итого' in first_cell:
+                print(f"ОСВ 19: итог на строке {i}")
                 break
-
-            if first_cell.replace('.', '', 1).replace(',', '').isdigit():
-                seller = current_seller
-                if seller_col < len(row) and row[seller_col] and row[seller_col].strip():
-                    seller = row[seller_col].strip()
-                    current_seller = seller
-                elif not seller:
-                    continue
-
-                doc_str = row[doc_col] if doc_col < len(row) else ''
-                doc_number = ''
-                doc_date = ''
-                if doc_str:
-                    parts = re.split(r'\s+от\s+', doc_str, maxsplit=1, flags=re.IGNORECASE)
-                    if len(parts) == 2:
-                        doc_number = parts[0].strip()
-                        doc_date = parts[1].strip()
-                    else:
-                        doc_number = doc_str
-
-                operation_code = row[op_col] if op_col < len(row) else ''
-                acceptance_date = row[accept_col] if accept_col < len(row) else ''
-
-                amount = self._clean_number(row[amount_col] if amount_col < len(row) else '0')
-                vat = self._clean_number(row[vat_col] if vat_col < len(row) else '0')
-
-                if amount == 0 and vat == 0:
-                    continue
-
-                records.append({
-                    'company': company,
-                    'period_start': period_start,
-                    'period_end': period_end,
-                    'doc_type': 'purchase_book',
-                    'product_group': 'Покупки',
-                    'seller': seller,
-                    'buyer': '',
-                    'document_number': doc_number,
-                    'document_date': doc_date,
-                    'operation_code': operation_code,
-                    'acceptance_date': acceptance_date,
-                    'purchase_amount_with_vat': amount,
-                    'sales_amount_with_vat': 0.0,
-                    'sales_amount_without_vat': 0.0,
-                    'vat_deductible': vat,
-                    'vat_to_budget': 0.0,
-                    'nomenclature': '',
-                    'revenue': 0.0,
-                    'cost_price': 0.0,
-                    'gross_profit': 0.0,
-                    'sales_expenses': 0.0,
-                    'other_income_expenses': 0.0,
-                    'net_profit': 0.0,
-                    'payment_document': '',
-                    'quantity': 1
-                })
+            
+            if not first_cell or first_cell == 'nan':
+                continue
+            
+            incoming_vat = self._clean_number(row[debit_turnover_col] if debit_turnover_col < len(row) else 0)
+            deducted_vat = self._clean_number(row[credit_turnover_col] if credit_turnover_col < len(row) else 0)
+            
+            if incoming_vat == 0 and deducted_vat == 0:
+                continue
+            
+            if first_cell[0].isdigit():
+                account = row[0].strip()
+                current_account = account
             else:
-                if not first_cell[0].isdigit():
-                    current_seller = row[0].strip()
+                account = current_account
+            
+            records.append({
+                'company': company,
+                'period_start': period_start,
+                'period_end': period_end,
+                'account': account,
+                'product_group': 'ОСВ 19',
+                'doc_type': 'osv_19',
+                'nomenclature': '',
+                'seller': row[0].strip() if not first_cell[0].isdigit() else '',
+                'buyer': '',
+                'document_number': '',
+                'document_date': '',
+                'operation_code': '',
+                'acceptance_date': '',
+                'payment_document': '',
+                'revenue': 0.0,
+                'cost_price': 0.0,
+                'gross_profit': 0.0,
+                'sales_expenses': 0.0,
+                'other_income_expenses': 0.0,
+                'net_profit': 0.0,
+                'vat_deductible': deducted_vat,
+                'vat_to_budget': 0.0,
+                'purchase_amount_with_vat': 0.0,
+                'sales_amount_with_vat': 0.0,
+                'sales_amount_without_vat': 0.0,
+                'quantity': 1
+            })
 
         if not records:
-            raise ValueError("Не найдено записей в книге покупок")
+            raise ValueError("Не найдено записей в ОСВ 19")
 
-        print(f"Книга покупок: найдено записей — {len(records)}")
+        print(f"ОСВ 19: найдено записей — {len(records)}")
         return pd.DataFrame(records)
+
+
+    #==========================================================================
+    # ========== КНИГА ПОКУПОК ==========
+    def _parse_purchase_book(self, file_path):
+            import pandas as pd
+            import re
+            from datetime import datetime
+
+            df = pd.read_excel(file_path, header=None, dtype=str)
+            df = df.fillna('').astype(str).apply(lambda col: col.str.strip())
+
+            company = "Неизвестная компания"
+            for i in range(min(10, len(df))):
+                row = df.iloc[i].tolist()
+                for j, cell in enumerate(row):
+                    if 'покупатель' in cell.lower():
+                        for k in range(j+1, len(row)):
+                            if row[k].strip():
+                                company = row[k].strip()
+                                break
+                        if company != "Неизвестная компания":
+                            break
+                if company != "Неизвестная компания":
+                    break
+            print(f"Книга покупок: компания = {company}")
+
+            header_text = ' '.join(df.iloc[:20].values.flatten()).lower()
+            period_match = re.search(r'с\s+(\d{2}\.\d{2}\.\d{4})\s+по\s+(\d{2}\.\d{2}\.\d{4})', header_text, re.IGNORECASE)
+            if not period_match:
+                raise ValueError("Не найден период в книге покупок")
+            period_start = datetime.strptime(period_match.group(1), "%d.%m.%Y").strftime("%Y-%m-%d")
+            period_end = datetime.strptime(period_match.group(2), "%d.%m.%Y").strftime("%Y-%m-%d")
+
+            header_row_idx, num_to_idx = self._find_header_row_loose(df, min_required=5)
+            if header_row_idx is None:
+                header_row_idx, num_to_idx = self._find_header_row_fallback(df, min_count=8)
+                if header_row_idx is None:
+                    raise ValueError("Не найдена строка с номерами колонок")
+
+            print(f"Книга покупок: строка с номерами на индексе {header_row_idx}")
+            print(f"Соответствие базовых номеров колонкам: {num_to_idx}")
+
+            required_nums = [2, 3, 8, 9, 14, 15]
+            for num in required_nums:
+                if num not in num_to_idx:
+                    raise ValueError(f"Не найден номер колонки {num}")
+
+            op_col = num_to_idx[2]
+            doc_col = num_to_idx[3]
+            accept_col = num_to_idx[8]
+            seller_col = num_to_idx[9]
+            amount_col = num_to_idx[14]
+            vat_col = num_to_idx[15]
+
+            records = []
+            current_seller = None
+            data_start = header_row_idx + 1
+
+            for i in range(data_start, len(df)):
+                row = df.iloc[i].tolist()
+                first_cell_raw = row[0] if len(row) > 0 else ''
+                first_cell = str(first_cell_raw).strip().lower() if first_cell_raw else ''
+
+                if not first_cell:
+                    continue
+
+                if 'всего по продавцу' in first_cell:
+                    current_seller = None
+                    continue
+
+                if first_cell == 'всего' and 'по продавцу' not in first_cell:
+                    break
+
+                if first_cell.replace('.', '', 1).replace(',', '').isdigit():
+                    seller = current_seller
+                    if seller_col < len(row) and row[seller_col] and row[seller_col].strip():
+                        seller = row[seller_col].strip()
+                        current_seller = seller
+                    elif not seller:
+                        continue
+
+                    doc_str = row[doc_col] if doc_col < len(row) else ''
+                    doc_number = ''
+                    doc_date = ''
+                    if doc_str:
+                        parts = re.split(r'\s+от\s+', doc_str, maxsplit=1, flags=re.IGNORECASE)
+                        if len(parts) == 2:
+                            doc_number = parts[0].strip()
+                            doc_date = parts[1].strip()
+                        else:
+                            doc_number = doc_str
+
+                    operation_code = row[op_col] if op_col < len(row) else ''
+                    acceptance_date = row[accept_col] if accept_col < len(row) else ''
+
+                    amount = self._clean_number(row[amount_col] if amount_col < len(row) else '0')
+                    vat = self._clean_number(row[vat_col] if vat_col < len(row) else '0')
+
+                    if amount == 0 and vat == 0:
+                        continue
+
+                    records.append({
+                        'company': company,
+                        'period_start': period_start,
+                        'period_end': period_end,
+                        'doc_type': 'Книга покупок',
+                        'product_group': 'Покупки',
+                        'seller': seller,
+                        'buyer': '',
+                        'document_number': doc_number,
+                        'document_date': doc_date,
+                        'operation_code': operation_code,
+                        'acceptance_date': acceptance_date,
+                        'purchase_amount_with_vat': amount,
+                        'sales_amount_with_vat': 0.0,
+                        'sales_amount_without_vat': 0.0,
+                        'vat_deductible': vat,
+                        'vat_to_budget': 0.0,
+                        'nomenclature': '',
+                        'revenue': 0.0,
+                        'cost_price': 0.0,
+                        'gross_profit': 0.0,
+                        'sales_expenses': 0.0,
+                        'other_income_expenses': 0.0,
+                        'net_profit': 0.0,
+                        'payment_document': '',
+                        'quantity': 1
+                    })
+                else:
+                    if not first_cell[0].isdigit():
+                        current_seller = row[0].strip()
+
+            if not records:
+                raise ValueError("Не найдено записей в книге покупок")
+
+            print(f"Книга покупок: найдено записей — {len(records)}")
+            return pd.DataFrame(records)
 
     # ========== КНИГА ПРОДАЖ ==========
     def _parse_sales_book(self, file_path):
@@ -1504,7 +1870,7 @@ class MainWindow(QMainWindow):
                     'company': company,
                     'period_start': period_start,
                     'period_end': period_end,
-                    'doc_type': 'sales_book',
+                    'doc_type': 'Книга продаж',
                     'product_group': 'Продажи',
                     'seller': '',
                     'buyer': buyer,
@@ -1537,54 +1903,15 @@ class MainWindow(QMainWindow):
         print(f"Книга продаж: найдено записей — {len(records)}")
         return pd.DataFrame(records)
 
-    # ========== ОСВ (заглушки) ==========
-    def _parse_osv_19_detailed(self, file_path):
-        print("ОСВ 19: найдено записей — 0")
-        return pd.DataFrame()
-
-    def _parse_osv_41_detailed(self, file_path):
-        print("ОСВ 41: найдено записей — 0")
-        return pd.DataFrame()
-
-    def _parse_osv_44_detailed(self, file_path):
-        print("ОСВ 44: найдено записей — 0")
-        return pd.DataFrame()
-
-    def _parse_osv_60_detailed(self, file_path):
-        print("ОСВ 60: найдено записей — 0")
-        return pd.DataFrame()
-
-    def _parse_osv_62_detailed(self, file_path):
-        print("ОСВ 62: найдено записей — 0")
-        return pd.DataFrame()
-
-    def _parse_osv_68_detailed(self, file_path):
-        print("ОСВ 68: найдено записей — 0")
-        return pd.DataFrame()
-
-    def _parse_osv_90_detailed(self, file_path):
-        print("ОСВ 90: найдено записей — 0")
-        return pd.DataFrame()
-
-    def _parse_osv_91_detailed(self, file_path):
-        print("ОСВ 91: найдено записей — 0")
-        return pd.DataFrame()
-
-    def _parse_sales_report_detailed(self, file_path):
-        print("Отчет по продажам: заглушка")
-        return 0
-
-    def _import_legacy(self, file_path):
-        print("Legacy импорт: заглушка")
-        return 0
+   
 
     # ==================== ОТОБРАЖЕНИЕ ДАННЫХ ====================
     def display_data(self, df):
         self.table_model.setRowCount(0)
 
         column_order = [
-            'id', 'company', 'period_start', 'period_end', 'doc_type', 'product_group',
-            'seller', 'buyer', 'nomenclature',
+            'id', 'company', 'period_start', 'period_end', 'doc_type', 'account','product_group',
+            'seller', 'buyer', 'nomenclature', 'article',
             'document_number', 'document_date', 'operation_code', 'acceptance_date', 'payment_document',
             'purchase_amount_with_vat', 'sales_amount_without_vat', 'sales_amount_with_vat',
             'revenue', 'cost_price', 'gross_profit',
@@ -1598,10 +1925,12 @@ class MainWindow(QMainWindow):
             'period_start': 'Период с',
             'period_end': 'Период по',
             'doc_type': 'Тип',
+            'account': 'Счет',
             'product_group': 'Группа',
             'seller': 'Продавец',
             'buyer': 'Покупатель',
             'nomenclature': 'Номенклатура',
+            'article': 'Артикул',
             'document_number': '№ сч/ф',
             'document_date': 'Дата сч/ф',
             'operation_code': 'Код опер.',
@@ -2151,6 +2480,7 @@ class MainWindow(QMainWindow):
             'period_start': 'Период с',
             'period_end': 'Период по',
             'doc_type': 'Тип',
+            'account': 'Счет',
             'product_group': 'Группа',
             'seller': 'Продавец',
             'buyer': 'Покупатель',
@@ -2188,7 +2518,7 @@ class MainWindow(QMainWindow):
 
         try:
             buf = io.BytesIO()
-            self.figure.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+            self.figure1.savefig(buf, format='png', dpi=100, bbox_inches='tight')
             buf.seek(0)
 
             with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
@@ -3039,7 +3369,7 @@ class MainWindow(QMainWindow):
         
         # Текст о программе
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v7.3.0</p>
+        <p><b>Версия программы:</b> v7.4.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
