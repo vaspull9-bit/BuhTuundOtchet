@@ -1,5 +1,5 @@
 #======================================================================
-# BuhTuundOtchet v7.4.0 - Разработка ОСВ41
+# BuhTuundOtchet v7.5.0 - ОСВ41 Разработан!!
 import sys
 import os
 import sqlite3
@@ -1353,44 +1353,49 @@ class MainWindow(QMainWindow):
             if first_cell.replace('.', '').isdigit() and len(first_cell) < 10:
                 current_account = row[0].strip()
                 print(f"Счет: {current_account}")
-                i += 2  # пропускаем следующую пустую строку
+                i += 2
                 continue
 
             # 2. Номенклатура
             elif first_cell[0].isdigit() and len(first_cell) > 10:
-                # Извлекаем название (без артикула в начале)
                 parts = row[0].split(' ', 1)
                 if len(parts) == 2:
                     current_nomenclature = parts[1]
                 else:
                     current_nomenclature = row[0]
                 
-                # Артикул из колонки 1
                 current_article = row[1].strip() if len(row) > 1 else ''
-                print(f"Номенклатура: {current_nomenclature}, Артикул: {current_article}")
+                print(f"Номенклатура: {current_nomenclature[:50]}..., Артикул: {current_article}")
                 i += 2
                 continue
 
             # 3. Операция (Обороты за ...)
-            elif 'обороты за' in first_cell:
+            if 'обороты за' in first_cell:
+                print(f"НАШЕЛ ОБОРОТЫ: {row[0]}")
+                
                 current_operation = row[0]
                 
                 # Извлекаем дату
                 date_match = re.search(r'(\d{2}\.\d{2}\.\d{2,4})', first_cell)
                 op_date = date_match.group(1) if date_match else ''
 
-                # Получаем БУ (суммы) из текущей строки
-                bu_debit = self._clean_number(row[4] if len(row) > 4 else 0)
-                bu_credit = self._clean_number(row[5] if len(row) > 5 else 0)
-
-                # Количество берем из следующей строки (она пустая в колонке 0, но данные есть)
+                # Получаем данные из следующей строки (Кол.)
                 if i + 1 < len(df):
                     next_row = df.iloc[i + 1].tolist()
-                    qty_debit = self._clean_number(next_row[4] if len(next_row) > 4 else 0)
-                    qty_credit = self._clean_number(next_row[5] if len(next_row) > 5 else 0)
+                    
+                    # Берем суммы из КОЛОНКИ 5 (дебет) и КОЛОНКИ 6 (кредит)
+                    bu_debit = self._clean_number(next_row[5] if len(next_row) > 5 else 0)   # Дебет в колонке 5
+                    bu_credit = self._clean_number(next_row[6] if len(next_row) > 6 else 0)  # Кредит в колонке 6
+                    
+                    # Количество - тоже из колонок 5 и 6 (там уже лежат цифры)
+                    qty_debit = bu_debit   # Количество совпадает с суммой? Или отдельно?
+                    qty_credit = bu_credit
+                    
+                    print(f"  НАЙДЕНО: Дебет={bu_debit}, Кредит={bu_credit} (колонки 5,6)")
 
-                    # Сохраняем приход
+                    # Сохраняем приход (дебет)
                     if bu_debit > 0:
+                        print(f"  СОХРАНЯЕМ ПРИХОД: {bu_debit}")
                         records.append({
                             'company': company,
                             'period_start': period_start,
@@ -1418,12 +1423,13 @@ class MainWindow(QMainWindow):
                             'purchase_amount_with_vat': bu_debit,
                             'sales_amount_with_vat': 0.0,
                             'sales_amount_without_vat': 0.0,
-                            'quantity': qty_debit,
+                            'quantity': bu_debit,  # Количество = сумме? Или отдельно?
                             'import_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                         })
 
-                    # Сохраняем расход
+                    # Сохраняем расход (кредит)
                     if bu_credit > 0:
+                        print(f"  СОХРАНЯЕМ РАСХОД: {bu_credit}")
                         records.append({
                             'company': company,
                             'period_start': period_start,
@@ -1451,15 +1457,16 @@ class MainWindow(QMainWindow):
                             'purchase_amount_with_vat': 0.0,
                             'sales_amount_with_vat': 0.0,
                             'sales_amount_without_vat': 0.0,
-                            'quantity': qty_credit,
+                            'quantity': bu_credit,
                             'import_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                         })
 
-                i += 2  # пропускаем строку с количеством
+                i += 2
                 continue
 
-            # 4. Основной склад и другие - пропускаем
+            # 4. Основной склад и другие
             else:
+                print(f"Пропускаем строку {i}: {first_cell[:30]}")
                 i += 2
                 continue
 
