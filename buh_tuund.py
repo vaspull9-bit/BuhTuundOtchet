@@ -1,5 +1,5 @@
 #======================================================================
-# BuhTuundOtchet v7.5.0 - ОСВ41 Разработан!!
+# BuhTuundOtchet v7.6.0 - ОСВ41 Отчеты работают все!
 import sys
 import os
 import sqlite3
@@ -81,6 +81,18 @@ class DatabaseManager:
         for col, typ in new_columns.items():
             if col not in existing:
                 cursor.execute(f"ALTER TABLE reports ADD COLUMN {col} {typ}")
+
+        # Добавляем колонки для итогов ОСВ
+        osv_summary_columns = {
+            'osv_begin_balance': 'REAL',      # Сальдо на начало
+            'osv_end_balance': 'REAL',        # Сальдо на конец
+            'osv_turnover_debit': 'REAL',     # Обороты по дебету
+            'osv_turnover_credit': 'REAL',    # Обороты по кредиту
+        }
+
+        for col, typ in osv_summary_columns.items():
+            if col not in existing:
+                cursor.execute(f"ALTER TABLE reports ADD COLUMN {col} {typ}")        
         
         # 👇👇👇 СЮДА ВСТАВЛЯЕМ НОВУЮ КОЛОНКУ 👇👇👇
         if 'account' not in existing:
@@ -134,7 +146,11 @@ class DatabaseManager:
             'payment_document': '',
             'purchase_amount_with_vat': 0.0,
             'sales_amount_without_vat': 0.0,
-            'sales_amount_with_vat': 0.0
+            'sales_amount_with_vat': 0.0,
+            'osv_begin_balance': 0.0,
+            'osv_end_balance': 0.0,
+            'osv_turnover_debit': 0.0,
+            'osv_turnover_credit': 0.0
         }
 
         for col, default in all_columns.items():
@@ -195,6 +211,16 @@ class DatabaseManager:
 
 # ==================== ГЛАВНОЕ ОКНО ====================
 class MainWindow(QMainWindow):
+
+    DOC_TYPE_NAMES = {
+    'purchase_book': 'Книга покупок',
+    'sales_book': 'Книга продаж',
+    'osv_19': 'ОСВ 19',
+    'osv_41': 'ОСВ 41',
+    'osv_41_summary': 'ОСВ 41 (итоги)',
+    # Добавим остальные по мере создания
+    }
+
     def __init__(self):
         super().__init__()
         self.db = DatabaseManager()
@@ -1388,7 +1414,7 @@ class MainWindow(QMainWindow):
                     bu_credit = self._clean_number(next_row[6] if len(next_row) > 6 else 0)  # Кредит в колонке 6
                     
                     # Количество - тоже из колонок 5 и 6 (там уже лежат цифры)
-                    qty_debit = bu_debit   # Количество совпадает с суммой? Или отдельно?
+                    qty_debit = bu_debit
                     qty_credit = bu_credit
                     
                     print(f"  НАЙДЕНО: Дебет={bu_debit}, Кредит={bu_credit} (колонки 5,6)")
@@ -1423,7 +1449,11 @@ class MainWindow(QMainWindow):
                             'purchase_amount_with_vat': bu_debit,
                             'sales_amount_with_vat': 0.0,
                             'sales_amount_without_vat': 0.0,
-                            'quantity': bu_debit,  # Количество = сумме? Или отдельно?
+                            'quantity': bu_debit,
+                            'osv_begin_balance': 0.0,
+                            'osv_end_balance': 0.0,
+                            'osv_turnover_debit': bu_debit,
+                            'osv_turnover_credit': 0.0,
                             'import_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                         })
 
@@ -1458,6 +1488,10 @@ class MainWindow(QMainWindow):
                             'sales_amount_with_vat': 0.0,
                             'sales_amount_without_vat': 0.0,
                             'quantity': bu_credit,
+                            'osv_begin_balance': 0.0,
+                            'osv_end_balance': 0.0,
+                            'osv_turnover_debit': 0.0,
+                            'osv_turnover_credit': bu_credit,
                             'import_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                         })
 
@@ -1469,6 +1503,64 @@ class MainWindow(QMainWindow):
                 print(f"Пропускаем строку {i}: {first_cell[:30]}")
                 i += 2
                 continue
+
+        # ===== ДОБАВЛЯЕМ ИТОГОВУЮ ЗАПИСЬ =====
+        # Находим строку с "Итого" и добавляем отдельную запись
+        for j in range(data_start, len(df)):
+            if 'итого' in df.iloc[j, 0].lower():
+                total_row = df.iloc[j].tolist()
+                print(f"НАЙДЕНА ИТОГОВАЯ СТРОКА: {total_row[0]}")
+                
+                # Получаем итоговые суммы из строки "Итого"
+                # По вашей разблюдовке:
+                # Колонка 3: Сальдо на начало (Дебет) - 280 998,76
+                # Колонка 5: Обороты дебет - 5 498 429,29
+                # Колонка 6: Обороты кредит - 5 401 062,89
+                # Колонка 7: Сальдо на конец (Дебет) - 378 365,16
+                
+                begin_balance = self._clean_number(total_row[3] if len(total_row) > 3 else 0)
+                debit_turnover = self._clean_number(total_row[5] if len(total_row) > 5 else 0)
+                credit_turnover = self._clean_number(total_row[6] if len(total_row) > 6 else 0)
+                end_balance = self._clean_number(total_row[7] if len(total_row) > 7 else 0)
+                
+                print(f"  ИТОГО: нач={begin_balance}, обороты д/к={debit_turnover}/{credit_turnover}, кон={end_balance}")
+                
+                # Добавляем итоговую запись со всеми полями
+                records.append({
+                    'company': company,
+                    'period_start': period_start,
+                    'period_end': period_end,
+                    'account': '41_ИТОГО',
+                    'product_group': 'ОСВ 41',
+                    'doc_type': 'osv_41_summary',
+                    'nomenclature': 'ИТОГО по счету 41',
+                    'article': '',
+                    'seller': '',
+                    'buyer': '',
+                    'document_number': '',
+                    'document_date': '',
+                    'operation_code': '',
+                    'acceptance_date': '',
+                    'payment_document': 'Итоговые данные',
+                    'revenue': 0.0,
+                    'cost_price': 0.0,
+                    'gross_profit': 0.0,
+                    'sales_expenses': 0.0,
+                    'other_income_expenses': 0.0,
+                    'net_profit': 0.0,
+                    'vat_deductible': 0.0,
+                    'vat_to_budget': 0.0,
+                    'purchase_amount_with_vat': debit_turnover,
+                    'sales_amount_with_vat': 0.0,
+                    'sales_amount_without_vat': 0.0,
+                    'quantity': 0,
+                    'osv_begin_balance': begin_balance,
+                    'osv_end_balance': end_balance,
+                    'osv_turnover_debit': debit_turnover,
+                    'osv_turnover_credit': credit_turnover,
+                    'import_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                })
+                break
 
         if not records:
             raise ValueError("Не найдено записей в ОСВ 41")
@@ -1715,7 +1807,7 @@ class MainWindow(QMainWindow):
                         'company': company,
                         'period_start': period_start,
                         'period_end': period_end,
-                        'doc_type': 'Книга покупок',
+                        'doc_type': 'purchase_book',
                         'product_group': 'Покупки',
                         'seller': seller,
                         'buyer': '',
@@ -1877,7 +1969,7 @@ class MainWindow(QMainWindow):
                     'company': company,
                     'period_start': period_start,
                     'period_end': period_end,
-                    'doc_type': 'Книга продаж',
+                    'doc_type': 'sales_book',
                     'product_group': 'Продажи',
                     'seller': '',
                     'buyer': buyer,
@@ -1917,7 +2009,7 @@ class MainWindow(QMainWindow):
         self.table_model.setRowCount(0)
 
         column_order = [
-            'id', 'company', 'period_start', 'period_end', 'doc_type', 'account','product_group',
+            'id', 'company', 'period_start', 'period_end', 'doc_type', 'account', 'product_group',
             'seller', 'buyer', 'nomenclature', 'article',
             'document_number', 'document_date', 'operation_code', 'acceptance_date', 'payment_document',
             'purchase_amount_with_vat', 'sales_amount_without_vat', 'sales_amount_with_vat',
@@ -1958,6 +2050,16 @@ class MainWindow(QMainWindow):
             'import_date': 'Дата импорта'
         }
 
+        # Словарь для перевода типов документов
+        doc_type_names = {
+            'purchase_book': 'Книга покупок',
+            'sales_book': 'Книга продаж',
+            'osv_19': 'ОСВ 19',
+            'osv_41': 'ОСВ 41',
+            'osv_41_summary': 'ОСВ 41 (итоги)',
+            # Добавьте другие типы по мере необходимости
+        }
+
         headers = [ru_headers.get(col, col) for col in column_order]
         self.table_model.setHorizontalHeaderLabels(headers)
 
@@ -1968,27 +2070,37 @@ class MainWindow(QMainWindow):
             items = []
             for col in column_order:
                 value = row[col] if col in row.index else ''
-                if col in ['purchase_amount_with_vat', 'sales_amount_without_vat', 'sales_amount_with_vat',
-                           'revenue', 'cost_price', 'gross_profit', 'sales_expenses',
-                           'other_income_expenses', 'net_profit', 'vat_deductible', 'vat_to_budget']:
+                
+                # 👇 СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ ТИПА ДОКУМЕНТА
+                if col == 'doc_type':
+                    # Переводим английское название в русское
+                    display_value = doc_type_names.get(str(value), str(value))
+                
+                elif col in ['purchase_amount_with_vat', 'sales_amount_without_vat', 'sales_amount_with_vat',
+                        'revenue', 'cost_price', 'gross_profit', 'sales_expenses',
+                        'other_income_expenses', 'net_profit', 'vat_deductible', 'vat_to_budget']:
                     if isinstance(value, (int, float)):
                         display_value = f"{value:,.2f} ₽".replace(",", " ")
                     else:
                         display_value = str(value)
+                
                 elif col == 'quantity':
                     if isinstance(value, (int, float)):
                         display_value = str(int(value))
                     else:
                         display_value = str(value)
+                
                 else:
                     display_value = str(value)
+                
                 item = QStandardItem(display_value)
                 item.setData(value)
                 items.append(item)
+            
             self.table_model.appendRow(items)
 
         self.table_view.resizeColumnsToContents()
-
+    #=====================================================================
     # ==================== ФИЛЬТРЫ ====================
     def update_filter_combos(self):
         current_company = self.company_combo.currentText()
@@ -2029,6 +2141,7 @@ class MainWindow(QMainWindow):
         if index >= 0:
             self.group_combo.setCurrentIndex(index)
 
+    #===================================================================================
     def _period_to_dates(self, period_str):
         import calendar
         try:
@@ -2708,6 +2821,32 @@ class MainWindow(QMainWindow):
             elements.append(Spacer(1, 20))
             # elements.append(PageBreak())
 
+            # Получаем итоги ОСВ 41
+           # Получаем итоги ОСВ 41
+            osv_41_summary = self.current_df[self.current_df['doc_type'] == 'osv_41_summary']
+            if not osv_41_summary.empty:
+                summary = osv_41_summary.iloc[0]
+                elements.append(Paragraph("Итоги по счету 41 (Товары):", subtitle_style))
+                
+                # Берем значения из новых колонок
+                begin_balance = summary.get('osv_begin_balance', 0)
+                debit_turnover = summary.get('osv_turnover_debit', 0)
+                credit_turnover = summary.get('osv_turnover_credit', 0)
+                end_balance = summary.get('osv_end_balance', 0)
+                
+                # Добавляем защиту от None
+                if begin_balance is None: begin_balance = 0
+                if debit_turnover is None: debit_turnover = 0
+                if credit_turnover is None: credit_turnover = 0
+                if end_balance is None: end_balance = 0
+                
+                elements.append(Paragraph(f"• Сальдо на начало: {begin_balance:,.2f} ₽", styles['Normal']))
+                elements.append(Paragraph(f"• Обороты по дебету (приход): {debit_turnover:,.2f} ₽", styles['Normal']))
+                elements.append(Paragraph(f"• Обороты по кредиту (расход): {credit_turnover:,.2f} ₽", styles['Normal']))
+                elements.append(Paragraph(f"• Сальдо на конец: {end_balance:,.2f} ₽", styles['Normal']))
+                elements.append(Spacer(1, 10))
+
+
             # ===== ВСЕ 9 ГРАФИКОВ - ПО 2 НА СТРАНИЦУ =====
             if hasattr(self, 'chart_paths'):
                 # Страница 1: Графики 1-2
@@ -3024,63 +3163,72 @@ class MainWindow(QMainWindow):
             doc.add_paragraph()
             doc.add_page_break()
 
-            #---------------------------------------------------------------------------------------
-            # ===== ВСЕ 9 ГРАФИКОВ - по 2 шт НА ОТДЕЛЬНОЙ СТРАНИЦЕ =====
+            # ===== ИТОГИ ОСВ 41 (если есть) =====
+            osv_41_summary = self.current_df[self.current_df['doc_type'] == 'osv_41_summary']
+            if not osv_41_summary.empty:
+                doc.add_heading('Итоги по счету 41 (Товары):', level=2)
+                summary = osv_41_summary.iloc[0]
+                doc.add_paragraph(f"• Сальдо на начало: {summary.get('purchase_amount_with_vat', 0):,.2f} ₽")
+                # Здесь можно добавить другие итоги, если есть соответствующие колонки
+                doc.add_paragraph()
+
+            # ===== ВСЕ 9 ГРАФИКОВ =====
             if hasattr(self, 'chart_paths'):
-                # Страница 1: Графики 1-2
-                doc.add_heading('График 1. Распределение прибыли по товарным группам', level=2)
+                # График 1
                 if 'graph1' in self.chart_paths and os.path.exists(self.chart_paths['graph1']):
-                    doc.add_picture(self.chart_paths['graph1'], width=Inches(6.5))  # Растянули
-                doc.add_paragraph()
+                    doc.add_heading('График 1. Распределение прибыли по товарным группам', level=2)
+                    doc.add_picture(self.chart_paths['graph1'], width=Inches(6.5))
+                    doc.add_paragraph()
                 
-                doc.add_heading('График 2. ТОП-5 товаров по прибыльности', level=2)
+                # График 2
                 if 'graph2' in self.chart_paths and os.path.exists(self.chart_paths['graph2']):
+                    doc.add_heading('График 2. ТОП-5 товаров по прибыльности', level=2)
                     doc.add_picture(self.chart_paths['graph2'], width=Inches(6.5))
-                doc.add_paragraph()
-                doc.add_page_break()
+                    doc.add_paragraph()
                 
-                # Страница 2: Графики 3-4
-                doc.add_heading('График 3. Закупки с НДС по кварталам', level=2)
+                # График 3
                 if 'graph3' in self.chart_paths and os.path.exists(self.chart_paths['graph3']):
+                    doc.add_heading('График 3. Закупки с НДС по кварталам', level=2)
                     doc.add_picture(self.chart_paths['graph3'], width=Inches(6.5))
-                doc.add_paragraph()
+                    doc.add_paragraph()
                 
-                doc.add_heading('График 4. Выручка с НДС по кварталам', level=2)
+                # График 4
                 if 'graph4' in self.chart_paths and os.path.exists(self.chart_paths['graph4']):
+                    doc.add_heading('График 4. Выручка с НДС по кварталам', level=2)
                     doc.add_picture(self.chart_paths['graph4'], width=Inches(6.5))
-                doc.add_paragraph()
-                doc.add_page_break()
+                    doc.add_paragraph()
                 
-                # Страница 3: Графики 5-6
-                doc.add_heading('График 5. НДС в бюджет по кварталам', level=2)
+                # График 5
                 if 'graph5' in self.chart_paths and os.path.exists(self.chart_paths['graph5']):
+                    doc.add_heading('График 5. НДС в бюджет по кварталам', level=2)
                     doc.add_picture(self.chart_paths['graph5'], width=Inches(6.5))
-                doc.add_paragraph()
+                    doc.add_paragraph()
                 
-                doc.add_heading('График 6. НДС по выручке по кварталам', level=2)
+                # График 6
                 if 'graph6' in self.chart_paths and os.path.exists(self.chart_paths['graph6']):
+                    doc.add_heading('График 6. НДС по выручке по кварталам', level=2)
                     doc.add_picture(self.chart_paths['graph6'], width=Inches(6.5))
-                doc.add_paragraph()
-                doc.add_page_break()
+                    doc.add_paragraph()
                 
-                # Страница 4: Графики 7-8
-                doc.add_heading('График 7. НДС по затратам по кварталам', level=2)
+                # График 7
                 if 'graph7' in self.chart_paths and os.path.exists(self.chart_paths['graph7']):
+                    doc.add_heading('График 7. НДС по затратам по кварталам', level=2)
                     doc.add_picture(self.chart_paths['graph7'], width=Inches(6.5))
-                doc.add_paragraph()
+                    doc.add_paragraph()
                 
-                doc.add_heading('График 8. Валовая прибыль по кварталам', level=2)
+                # График 8
                 if 'graph8' in self.chart_paths and os.path.exists(self.chart_paths['graph8']):
+                    doc.add_heading('График 8. Валовая прибыль по кварталам', level=2)
                     doc.add_picture(self.chart_paths['graph8'], width=Inches(6.5))
-                doc.add_paragraph()
-                doc.add_page_break()
+                    doc.add_paragraph()
                 
-                # Страница 5: График 9
-                doc.add_heading('График 9. Затраты по кварталам (все налоги и закупки)', level=2)
+                # График 9
                 if 'graph9' in self.chart_paths and os.path.exists(self.chart_paths['graph9']):
+                    doc.add_heading('График 9. Затраты по кварталам (все налоги и закупки)', level=2)
                     doc.add_picture(self.chart_paths['graph9'], width=Inches(6.5))
-                doc.add_paragraph()
-                doc.add_page_break()
+                    doc.add_paragraph()
+
+            doc.add_page_break()
 
             # ===== ТАБЛИЦА 2. Детальные данные =====
             doc.add_heading('Таблица 2. Детальные данные (первые 15 записей)', level=2)
@@ -3196,10 +3344,10 @@ class MainWindow(QMainWindow):
             footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
             footer.add_run('Сформировано программой BuhTuundOtchet').italic = True
 
-            # ===== СОХРАНЕНИЕ ДОКУМЕНТА =====
+            # ===== СОХРАНЕНИЕ =====
             doc.save(file_path)
 
-            # ===== УДАЛЕНИЕ ВРЕМЕННЫХ ФАЙЛОВ =====
+            # Удаляем временные файлы
             if hasattr(self, 'chart_paths'):
                 for path in self.chart_paths.values():
                     try:
@@ -3209,8 +3357,6 @@ class MainWindow(QMainWindow):
                         pass
 
             QMessageBox.information(self, "Успех", f"Word файл сохранен: {file_path}")
-            
-            # Открываем папку с сохраненным файлом
             self.open_containing_folder(file_path)
 
         except Exception as e:
@@ -3376,7 +3522,7 @@ class MainWindow(QMainWindow):
         
         # Текст о программе
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v7.4.0</p>
+        <p><b>Версия программы:</b> v7.6.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
