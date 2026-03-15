@@ -1,5 +1,5 @@
 #======================================================================
-# BuhTuundOtchet v7.7.0 - ОСВ44 Отчеты работают все! 
+# BuhTuundOtchet v7.8.0 - ОСВ60 Отчеты работают все! 
 import sys
 import os
 import sqlite3
@@ -92,7 +92,19 @@ class DatabaseManager:
 
         for col, typ in osv_summary_columns.items():
             if col not in existing:
-                cursor.execute(f"ALTER TABLE reports ADD COLUMN {col} {typ}")        
+                cursor.execute(f"ALTER TABLE reports ADD COLUMN {col} {typ}") 
+
+        # Добавляем колонки для ОСВ 60
+        osv_60_columns = {
+            'osv_begin_balance_debit': 'REAL',
+            'osv_begin_balance_credit': 'REAL',
+            'osv_end_balance_debit': 'REAL',
+            'osv_end_balance_credit': 'REAL',
+        }
+
+        for col, typ in osv_60_columns.items():
+            if col not in existing:
+                cursor.execute(f"ALTER TABLE reports ADD COLUMN {col} {typ}")       
         
         # 👇👇👇 СЮДА ВСТАВЛЯЕМ НОВУЮ КОЛОНКУ 👇👇👇
         if 'account' not in existing:
@@ -150,7 +162,11 @@ class DatabaseManager:
             'osv_begin_balance': 0.0,
             'osv_end_balance': 0.0,
             'osv_turnover_debit': 0.0,
-            'osv_turnover_credit': 0.0
+            'osv_turnover_credit': 0.0,
+            'osv_begin_balance_debit': 0.0,
+            'osv_begin_balance_credit': 0.0,
+            'osv_end_balance_debit': 0.0,
+            'osv_end_balance_credit': 0.0
         }
 
         for col, default in all_columns.items():
@@ -222,7 +238,8 @@ class MainWindow(QMainWindow):
     'osv_41': 'ОСВ 41',
     'osv_41_summary': 'ОСВ 41 (итоги)',
     'osv_44_summary': 'ОСВ 44 (итоги)',
-    # Добавим остальные по мере создания
+    'osv_60': 'ОСВ 60',
+    'osv_60_summary': 'ОСВ 60 (итоги)'  # ← добавить
     }
 
     def __init__(self):
@@ -1320,6 +1337,216 @@ class MainWindow(QMainWindow):
         return '01'
     
     
+    #==========================================================================
+    # ========== ПАРСЕР ОСВ60 ==========
+
+    def _parse_osv_60_detailed(self, file_path):
+        """
+        Парсинг оборотно-сальдовой ведомости по счету 60 (Расчеты с поставщиками)
+        
+        Интерпретация данных:
+        - Дебетовое сальдо = авансы выданные (поставщики должны нам)
+        - Кредитовое сальдо = наш долг перед поставщиками
+        - Обороты по дебету = оплата поставщикам
+        - Обороты по кредиту = поступление товаров/услуг
+        """
+        import pandas as pd
+        import re
+        from datetime import datetime
+
+        print(f"Парсер ОСВ 60: начало обработки {file_path}")
+        df = pd.read_excel(file_path, header=None, dtype=str)
+        df = df.fillna('').astype(str).apply(lambda col: col.str.strip())
+        print(f"Прочитано строк: {len(df)}")
+
+        # --- 1. Компания ---
+        company = "Неизвестная компания"
+        if len(df) > 0 and df.iloc[0, 0] and df.iloc[0, 0] != 'nan':
+            company = df.iloc[0, 0].strip()
+        print(f"ОСВ 60: компания = {company}")
+
+        # --- 2. Период ---
+        period_start = "2025-01-01"
+        period_end = "2025-12-31"
+        if len(df) > 1:
+            year_match = re.search(r'(\d{4})', df.iloc[1, 0])
+            if year_match:
+                year = year_match.group(1)
+                period_start = f"{year}-01-01"
+                period_end = f"{year}-12-31"
+                print(f"ОСВ 60: год {year}")
+
+        # --- 3. Находим начало данных (после строки с заголовками) ---
+        data_start = None
+        for i in range(len(df)):
+            if df.iloc[i, 0].strip() == '60':
+                data_start = i
+                print(f"ОСВ 60: данные начинаются со строки {data_start}")
+                break
+
+        if data_start is None:
+            raise ValueError("Не найдена строка с '60' в ОСВ 60")
+
+        records = []
+        current_account = None
+        total_begin_debit = 0
+        total_begin_credit = 0
+        total_debit_turnover = 0
+        total_credit_turnover = 0
+        total_end_debit = 0
+        total_end_credit = 0
+
+        # --- 4. Сбор данных ---
+        for i in range(data_start, len(df)):
+            row = df.iloc[i].tolist()
+            first_cell = str(row[0]).strip().lower() if row[0] else ''
+
+            if 'итого' in first_cell:
+                print(f"ОСВ 60: итог на строке {i}")
+                # Получаем итоговые значения из строки "Итого"
+                total_begin_debit = self._clean_number(row[1] if len(row) > 1 else 0)
+                total_begin_credit = self._clean_number(row[2] if len(row) > 2 else 0)
+                total_debit_turnover = self._clean_number(row[3] if len(row) > 3 else 0)
+                total_credit_turnover = self._clean_number(row[4] if len(row) > 4 else 0)
+                total_end_debit = self._clean_number(row[5] if len(row) > 5 else 0)
+                total_end_credit = self._clean_number(row[6] if len(row) > 6 else 0)
+                
+                # Добавляем итоговую запись
+                records.append({
+                    'company': company,
+                    'period_start': period_start,
+                    'period_end': period_end,
+                    'account': '60',
+                    'product_group': 'ОСВ 60',
+                    'doc_type': 'osv_60_summary',
+                    'nomenclature': '',
+                    'seller': 'ИТОГО по счету 60',
+                    'buyer': '',
+                    'document_number': '',
+                    'document_date': '',
+                    'operation_code': '',
+                    'acceptance_date': '',
+                    'payment_document': '',
+                    'revenue': 0.0,
+                    'cost_price': 0.0,
+                    'gross_profit': 0.0,
+                    'sales_expenses': 0.0,
+                    'other_income_expenses': 0.0,
+                    'net_profit': 0.0,
+                    'vat_deductible': 0.0,
+                    'vat_to_budget': 0.0,
+                    'purchase_amount_with_vat': total_credit_turnover,  # Поступление товаров/услуг
+                    'sales_amount_with_vat': 0.0,
+                    'sales_amount_without_vat': 0.0,
+                    'quantity': 0,
+                    'osv_begin_balance_debit': total_begin_debit,
+                    'osv_begin_balance_credit': total_begin_credit,
+                    'osv_turnover_debit': total_debit_turnover,    # Оплата поставщикам
+                    'osv_turnover_credit': total_credit_turnover,  # Поступление товаров/услуг
+                    'osv_end_balance_debit': total_end_debit,
+                    'osv_end_balance_credit': total_end_credit,
+                    'import_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                })
+                break
+
+            # Если это строка счета 60 (итоги по счету)
+            if first_cell.replace('.', '').isdigit() and first_cell == '60':
+                current_account = '60'
+                begin_debit = self._clean_number(row[1] if len(row) > 1 else 0)
+                begin_credit = self._clean_number(row[2] if len(row) > 2 else 0)
+                debit_turnover = self._clean_number(row[3] if len(row) > 3 else 0)
+                credit_turnover = self._clean_number(row[4] if len(row) > 4 else 0)
+                end_debit = self._clean_number(row[5] if len(row) > 5 else 0)
+                end_credit = self._clean_number(row[6] if len(row) > 6 else 0)
+                
+                records.append({
+                    'company': company,
+                    'period_start': period_start,
+                    'period_end': period_end,
+                    'account': '60',
+                    'product_group': 'ОСВ 60',
+                    'doc_type': 'osv_60',
+                    'nomenclature': 'Счет 60 (общие итоги)',
+                    'seller': '',
+                    'buyer': '',
+                    'document_number': '',
+                    'document_date': '',
+                    'operation_code': '',
+                    'acceptance_date': '',
+                    'payment_document': '',
+                    'revenue': 0.0,
+                    'cost_price': 0.0,
+                    'gross_profit': 0.0,
+                    'sales_expenses': 0.0,
+                    'other_income_expenses': 0.0,
+                    'net_profit': 0.0,
+                    'vat_deductible': 0.0,
+                    'vat_to_budget': 0.0,
+                    'purchase_amount_with_vat': credit_turnover,
+                    'sales_amount_with_vat': 0.0,
+                    'sales_amount_without_vat': 0.0,
+                    'quantity': 0,
+                    'osv_begin_balance_debit': begin_debit,
+                    'osv_begin_balance_credit': begin_credit,
+                    'osv_turnover_debit': debit_turnover,
+                    'osv_turnover_credit': credit_turnover,
+                    'osv_end_balance_debit': end_debit,
+                    'osv_end_balance_credit': end_credit,
+                    'import_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                })
+                continue
+
+            # Если это контрагент
+            if first_cell and not first_cell[0].isdigit() and 'итого' not in first_cell:
+                counterparty = row[0].strip()
+                debit_turnover = self._clean_number(row[3] if len(row) > 3 else 0)
+                credit_turnover = self._clean_number(row[4] if len(row) > 4 else 0)
+                end_debit = self._clean_number(row[5] if len(row) > 5 else 0)
+                end_credit = self._clean_number(row[6] if len(row) > 6 else 0)
+                
+                if debit_turnover != 0 or credit_turnover != 0 or end_debit != 0 or end_credit != 0:
+                    records.append({
+                        'company': company,
+                        'period_start': period_start,
+                        'period_end': period_end,
+                        'account': '60',
+                        'product_group': 'ОСВ 60',
+                        'doc_type': 'osv_60',
+                        'nomenclature': '',
+                        'seller': counterparty,  # Поставщик
+                        'buyer': '',
+                        'document_number': '',
+                        'document_date': '',
+                        'operation_code': '',
+                        'acceptance_date': '',
+                        'payment_document': '',
+                        'revenue': 0.0,
+                        'cost_price': 0.0,
+                        'gross_profit': 0.0,
+                        'sales_expenses': 0.0,
+                        'other_income_expenses': 0.0,
+                        'net_profit': 0.0,
+                        'vat_deductible': 0.0,
+                        'vat_to_budget': 0.0,
+                        'purchase_amount_with_vat': credit_turnover,
+                        'sales_amount_with_vat': 0.0,
+                        'sales_amount_without_vat': 0.0,
+                        'quantity': 0,
+                        'osv_begin_balance_debit': 0,
+                        'osv_begin_balance_credit': 0,
+                        'osv_turnover_debit': debit_turnover,
+                        'osv_turnover_credit': credit_turnover,
+                        'osv_end_balance_debit': end_debit,
+                        'osv_end_balance_credit': end_credit,
+                        'import_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    })
+
+        if not records:
+            raise ValueError("Не найдено записей в ОСВ 60")
+
+        print(f"ОСВ 60: найдено записей — {len(records)}")
+        return pd.DataFrame(records)
+
 
     #==========================================================================
     # ========== ПАРСЕР ОСВ44 ==========
@@ -2196,7 +2423,11 @@ class MainWindow(QMainWindow):
             'purchase_amount_with_vat', 'sales_amount_without_vat', 'sales_amount_with_vat',
             'revenue', 'cost_price', 'gross_profit',
             'sales_expenses', 'other_income_expenses', 'net_profit',
-            'vat_deductible', 'vat_to_budget', 'quantity', 'import_date'
+            'vat_deductible', 'vat_to_budget', 'quantity', 
+            'osv_begin_balance_debit', 'osv_begin_balance_credit',      # Сальдо на начало
+            'osv_turnover_debit', 'osv_turnover_credit',                 # Обороты
+            'osv_end_balance_debit', 'osv_end_balance_credit',           # Сальдо на конец
+            'import_date'
         ]
 
         ru_headers = {
@@ -2228,6 +2459,12 @@ class MainWindow(QMainWindow):
             'vat_deductible': 'НДС покупки',
             'vat_to_budget': 'НДС продажи',
             'quantity': 'Кол-во',
+            'osv_begin_balance_debit': 'Сальдо нач. Дебет',
+            'osv_begin_balance_credit': 'Сальдо нач. Кредит',
+            'osv_turnover_debit': 'Обороты Дебет',
+            'osv_turnover_credit': 'Обороты Кредит',
+            'osv_end_balance_debit': 'Сальдо кон. Дебет',
+            'osv_end_balance_credit': 'Сальдо кон. Кредит',
             'import_date': 'Дата импорта'
         }
 
@@ -3049,6 +3286,63 @@ class MainWindow(QMainWindow):
                         elements.append(Paragraph(f"• {article}: {amount:,.2f} ₽", styles['Normal']))
                 elements.append(Spacer(1, 10))
 
+            # ===== ИТОГИ ОСВ 60 =====
+            osv_60_summary = self.current_df[self.current_df['doc_type'] == 'osv_60_summary']
+            if not osv_60_summary.empty:
+                elements.append(Paragraph("Итоги по счету 60 (Расчеты с поставщиками):", subtitle_style))
+                for _, row in osv_60_summary.iterrows():
+                    begin_debit = row.get('osv_begin_balance_debit', 0)
+                    begin_credit = row.get('osv_begin_balance_credit', 0)
+                    debit_turnover = row.get('osv_turnover_debit', 0)      # Оплата поставщикам
+                    credit_turnover = row.get('osv_turnover_credit', 0)    # Поступление товаров/услуг
+                    end_debit = row.get('osv_end_balance_debit', 0)        # Авансы выданные
+                    end_credit = row.get('osv_end_balance_credit', 0)      # Долг поставщикам
+                    
+                    # Защита от None
+                    if begin_debit is None: begin_debit = 0
+                    if begin_credit is None: begin_credit = 0
+                    if debit_turnover is None: debit_turnover = 0
+                    if credit_turnover is None: credit_turnover = 0
+                    if end_debit is None: end_debit = 0
+                    if end_credit is None: end_credit = 0
+                    
+                    elements.append(Paragraph(f"• Сальдо на начало: дебет {begin_debit:,.2f} ₽ (авансы выданные), кредит {begin_credit:,.2f} ₽ (долг поставщикам)", styles['Normal']))
+                    elements.append(Paragraph(f"• Обороты за период: дебет {debit_turnover:,.2f} ₽ (оплата поставщикам), кредит {credit_turnover:,.2f} ₽ (поступление товаров/услуг)", styles['Normal']))
+                    elements.append(Paragraph(f"• Сальдо на конец: дебет {end_debit:,.2f} ₽ (авансы выданные), кредит {end_credit:,.2f} ₽ (долг поставщикам)", styles['Normal']))
+                    
+                    # Аналитический комментарий
+                    if end_credit > 0:
+                        elements.append(Paragraph(f"  → Кредиторская задолженность перед поставщиками составляет {end_credit:,.2f} ₽", styles['Italic']))
+                    if end_debit > 0:
+                        elements.append(Paragraph(f"  → Авансы выданные поставщикам составляют {end_debit:,.2f} ₽", styles['Italic']))
+                    if abs(end_credit - end_debit) < 1000:
+                        elements.append(Paragraph(f"  → Расчеты с поставщиками практически сбалансированы", styles['Italic']))
+                elements.append(Spacer(1, 10))
+
+            # Детальные записи по контрагентам
+            osv_60_details = self.current_df[self.current_df['doc_type'] == 'osv_60']
+            if not osv_60_details.empty:
+                elements.append(Paragraph("Детализация по контрагентам (топ-10):", subtitle_style))
+                
+                # Сортируем по сумме долга (кредитовое сальдо) для вывода самых крупных
+                top_creditors = osv_60_details.nlargest(10, 'osv_end_balance_credit')[['seller', 'osv_end_balance_credit', 'osv_end_balance_debit']]
+                
+                for _, row in top_creditors.iterrows():
+                    seller = row.get('seller', '')
+                    debt = row.get('osv_end_balance_credit', 0)      # Долг им
+                    advances = row.get('osv_end_balance_debit', 0)   # Авансы им
+                    
+                    if debt is None: debt = 0
+                    if advances is None: advances = 0
+                    
+                    if debt > 0:
+                        elements.append(Paragraph(f"• {seller}: должны {debt:,.2f} ₽", styles['Normal']))
+                    elif advances > 0:
+                        elements.append(Paragraph(f"• {seller}: аванс {advances:,.2f} ₽", styles['Normal']))
+                elements.append(Spacer(1, 10))
+
+            
+
             # ===== ВСЕ 9 ГРАФИКОВ - ПО 2 НА СТРАНИЦУ =====
             if hasattr(self, 'chart_paths'):
                 # Страница 1: Графики 1-2
@@ -3396,6 +3690,58 @@ class MainWindow(QMainWindow):
                         doc.add_paragraph(f"• {article}: {amount:,.2f} ₽")
                 doc.add_paragraph()
 
+
+            # ===== ИТОГИ ОСВ 60 =====
+            osv_60_summary = self.current_df[self.current_df['doc_type'] == 'osv_60_summary']
+            if not osv_60_summary.empty:
+                doc.add_heading('Итоги по счету 60 (Расчеты с поставщиками):', level=2)
+                for _, row in osv_60_summary.iterrows():
+                    begin_debit = row.get('osv_begin_balance_debit', 0)
+                    begin_credit = row.get('osv_begin_balance_credit', 0)
+                    debit_turnover = row.get('osv_turnover_debit', 0)
+                    credit_turnover = row.get('osv_turnover_credit', 0)
+                    end_debit = row.get('osv_end_balance_debit', 0)
+                    end_credit = row.get('osv_end_balance_credit', 0)
+                    
+                    # Защита от None
+                    if begin_debit is None: begin_debit = 0
+                    if begin_credit is None: begin_credit = 0
+                    if debit_turnover is None: debit_turnover = 0
+                    if credit_turnover is None: credit_turnover = 0
+                    if end_debit is None: end_debit = 0
+                    if end_credit is None: end_credit = 0
+                    
+                    doc.add_paragraph(f"• Сальдо на начало: дебет {begin_debit:,.2f} ₽ (авансы выданные), кредит {begin_credit:,.2f} ₽ (долг поставщикам)")
+                    doc.add_paragraph(f"• Обороты за период: дебет {debit_turnover:,.2f} ₽ (оплата поставщикам), кредит {credit_turnover:,.2f} ₽ (поступление товаров/услуг)")
+                    doc.add_paragraph(f"• Сальдо на конец: дебет {end_debit:,.2f} ₽ (авансы выданные), кредит {end_credit:,.2f} ₽ (долг поставщикам)")
+                    
+                    if end_credit > 0:
+                        doc.add_paragraph(f"  → Кредиторская задолженность перед поставщиками составляет {end_credit:,.2f} ₽", style='IntenseQuote')
+                    if end_debit > 0:
+                        doc.add_paragraph(f"  → Авансы выданные поставщикам составляют {end_debit:,.2f} ₽", style='IntenseQuote')
+                doc.add_paragraph()
+
+            # Детализация по контрагентам
+            osv_60_details = self.current_df[self.current_df['doc_type'] == 'osv_60']
+            if not osv_60_details.empty:
+                doc.add_heading('Детализация по контрагентам (топ-10):', level=3)
+                top_creditors = osv_60_details.nlargest(10, 'osv_end_balance_credit')[['seller', 'osv_end_balance_credit', 'osv_end_balance_debit']]
+                
+                for _, row in top_creditors.iterrows():
+                    seller = row.get('seller', '')
+                    debt = row.get('osv_end_balance_credit', 0)
+                    advances = row.get('osv_end_balance_debit', 0)
+                    
+                    if debt is None: debt = 0
+                    if advances is None: advances = 0
+                    
+                    if debt > 0:
+                        doc.add_paragraph(f"• {seller}: должны {debt:,.2f} ₽")
+                    elif advances > 0:
+                        doc.add_paragraph(f"• {seller}: аванс {advances:,.2f} ₽")
+                doc.add_paragraph()
+            
+            #---------------------------------------------------------------
             # ===== ВСЕ 9 ГРАФИКОВ =====
             if hasattr(self, 'chart_paths'):
                 # График 1
@@ -3746,7 +4092,7 @@ class MainWindow(QMainWindow):
         
         # Текст о программе
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v7.7.0</p>
+        <p><b>Версия программы:</b> v7.8.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
