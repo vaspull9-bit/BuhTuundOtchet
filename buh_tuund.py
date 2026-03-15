@@ -1,5 +1,5 @@
 #======================================================================
-# BuhTuundOtchet v7.6.0 - ОСВ41 Отчеты работают все!
+# BuhTuundOtchet v7.7.0 - ОСВ44 Отчеты работают все! 
 import sys
 import os
 import sqlite3
@@ -208,8 +208,11 @@ class DatabaseManager:
         query += " ORDER BY period_start DESC, company"
         return pd.read_sql_query(query, self.conn, params=params)
 
-
+#&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+#
 # ==================== ГЛАВНОЕ ОКНО ====================
+#
+#&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
 class MainWindow(QMainWindow):
 
     DOC_TYPE_NAMES = {
@@ -218,6 +221,7 @@ class MainWindow(QMainWindow):
     'osv_19': 'ОСВ 19',
     'osv_41': 'ОСВ 41',
     'osv_41_summary': 'ОСВ 41 (итоги)',
+    'osv_44_summary': 'ОСВ 44 (итоги)',
     # Добавим остальные по мере создания
     }
 
@@ -1226,7 +1230,7 @@ class MainWindow(QMainWindow):
 
         print("-> Не распознан тип, пробуем legacy импорт")
         return self._import_legacy(file_path)
-
+    # ===================================================================================
     # ==================== ПАРСЕРЫ ====================
    
     def _extract_company_by_keyword(self, df, keyword):
@@ -1316,6 +1320,183 @@ class MainWindow(QMainWindow):
         return '01'
     
     
+
+    #==========================================================================
+    # ========== ПАРСЕР ОСВ44 ==========
+    
+    def _parse_osv_44_detailed(self, file_path):
+        """
+        Парсинг оборотно-сальдовой ведомости по счету 44 (Расходы на продажу)
+        """
+        import pandas as pd
+        import re
+        from datetime import datetime
+
+        print(f"Парсер ОСВ 44: начало обработки {file_path}")
+        df = pd.read_excel(file_path, header=None, dtype=str)
+        df = df.fillna('').astype(str).apply(lambda col: col.str.strip())
+        print(f"Прочитано строк: {len(df)}")
+
+        # --- 1. Компания ---
+        company = "Неизвестная компания"
+        if len(df) > 0 and df.iloc[0, 0] and df.iloc[0, 0] != 'nan':
+            company = df.iloc[0, 0].strip()
+        print(f"ОСВ 44: компания = {company}")
+
+        # --- 2. Период ---
+        period_start = "2025-01-01"
+        period_end = "2025-12-31"
+        if len(df) > 1:
+            year_match = re.search(r'(\d{4})', df.iloc[1, 0])
+            if year_match:
+                year = year_match.group(1)
+                period_start = f"{year}-01-01"
+                period_end = f"{year}-12-31"
+                print(f"ОСВ 44: год {year}")
+
+        # --- 3. Находим начало данных (после строки "Период") ---
+        data_start = None
+        for i in range(len(df)):
+            if 'период' in df.iloc[i, 0].lower():
+                data_start = i + 1
+                print(f"ОСВ 44: данные начинаются со строки {data_start}")
+                break
+
+        if data_start is None:
+            raise ValueError("Не найдена строка с 'Период' в ОСВ 44")
+
+        records = []
+
+        # --- 4. Собираем все строки до "Итого" ---
+        for i in range(data_start, len(df)):
+            row = df.iloc[i].tolist()
+            first_cell = str(row[0]).strip().lower() if row[0] else ''
+
+            if 'итого' in first_cell:
+                print(f"ОСВ 44: итог на строке {i}")
+                # Получаем итоговые значения
+                total_debit_turnover = self._clean_number(row[3] if len(row) > 3 else 0)  # Дебет (обороты)
+                total_credit_turnover = self._clean_number(row[4] if len(row) > 4 else 0) # Кредит (обороты)
+                
+                # Добавляем итоговую запись - ТОЛЬКО В НУЖНЫЕ ПОЛЯ!
+                records.append({
+                    'company': company,
+                    'period_start': period_start,
+                    'period_end': period_end,
+                    'account': '44',  # ← ТОЛЬКО номер счета
+                    'product_group': 'ОСВ 44',
+                    'doc_type': 'osv_44_summary',
+                    'nomenclature': '',  # ← ПУСТО!
+                    'article': '',
+                    'seller': '',
+                    'buyer': '',
+                    'document_number': '',
+                    'document_date': '',
+                    'operation_code': '',
+                    'acceptance_date': '',
+                    'payment_document': '',  # ← ПУСТО!
+                    'revenue': 0.0,
+                    'cost_price': total_debit_turnover,  # Расходы на продажу
+                    'gross_profit': 0.0,
+                    'sales_expenses': total_debit_turnover,  # Расходы на продажу
+                    'other_income_expenses': 0.0,
+                    'net_profit': 0.0,
+                    'vat_deductible': 0.0,
+                    'vat_to_budget': 0.0,
+                    'purchase_amount_with_vat': 0.0,
+                    'sales_amount_with_vat': 0.0,
+                    'sales_amount_without_vat': 0.0,
+                    'quantity': 0,
+                    'osv_begin_balance': 0.0,
+                    'osv_end_balance': 0.0,
+                    'osv_turnover_debit': total_debit_turnover,
+                    'osv_turnover_credit': total_credit_turnover,
+                    'import_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                })
+                break
+            
+            # Если есть статьи затрат с ненулевыми оборотами - сохраняем их
+            if first_cell and not first_cell[0].isdigit() and 'итого' not in first_cell:
+                article = first_cell
+                debit_turnover = self._clean_number(row[3] if len(row) > 3 else 0)
+                credit_turnover = self._clean_number(row[4] if len(row) > 4 else 0)
+                
+                if debit_turnover != 0 or credit_turnover != 0:
+                    records.append({
+                        'company': company,
+                        'period_start': period_start,
+                        'period_end': period_end,
+                        'account': '44',
+                        'product_group': 'ОСВ 44',
+                        'doc_type': 'osv_44',
+                        'nomenclature': article,  # Здесь название статьи уместно
+                        'article': '',
+                        'seller': '',
+                        'buyer': '',
+                        'document_number': '',
+                        'document_date': '',
+                        'operation_code': '',
+                        'acceptance_date': '',
+                        'payment_document': '',  # ПУСТО!
+                        'revenue': 0.0,
+                        'cost_price': debit_turnover,
+                        'gross_profit': 0.0,
+                        'sales_expenses': debit_turnover,
+                        'other_income_expenses': 0.0,
+                        'net_profit': 0.0,
+                        'vat_deductible': 0.0,
+                        'vat_to_budget': 0.0,
+                        'purchase_amount_with_vat': 0.0,
+                        'sales_amount_with_vat': 0.0,
+                        'sales_amount_without_vat': 0.0,
+                        'quantity': 0,
+                        'osv_begin_balance': 0.0,
+                        'osv_end_balance': 0.0,
+                        'osv_turnover_debit': debit_turnover,
+                        'osv_turnover_credit': credit_turnover,
+                        'import_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    })
+
+        if not records:
+            # Если нет данных, создаем запись с нулями для итога
+            records.append({
+                'company': company,
+                'period_start': period_start,
+                'period_end': period_end,
+                'account': '44',
+                'product_group': 'ОСВ 44',
+                'doc_type': 'osv_44_summary',
+                'nomenclature': '',
+                'article': '',
+                'seller': '',
+                'buyer': '',
+                'document_number': '',
+                'document_date': '',
+                'operation_code': '',
+                'acceptance_date': '',
+                'payment_document': '',
+                'revenue': 0.0,
+                'cost_price': 0.0,
+                'gross_profit': 0.0,
+                'sales_expenses': 0.0,
+                'other_income_expenses': 0.0,
+                'net_profit': 0.0,
+                'vat_deductible': 0.0,
+                'vat_to_budget': 0.0,
+                'purchase_amount_with_vat': 0.0,
+                'sales_amount_with_vat': 0.0,
+                'sales_amount_without_vat': 0.0,
+                'quantity': 0,
+                'osv_begin_balance': 0.0,
+                'osv_end_balance': 0.0,
+                'osv_turnover_debit': 0.0,
+                'osv_turnover_credit': 0.0,
+                'import_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            })
+
+        print(f"ОСВ 44: найдено записей — {len(records)}")
+        return pd.DataFrame(records)
+
     #==========================================================================
     # ========== ПАРСЕР ОСВ41 ==========
 
@@ -2821,7 +3002,7 @@ class MainWindow(QMainWindow):
             elements.append(Spacer(1, 20))
             # elements.append(PageBreak())
 
-            # Получаем итоги ОСВ 41
+          
            # Получаем итоги ОСВ 41
             osv_41_summary = self.current_df[self.current_df['doc_type'] == 'osv_41_summary']
             if not osv_41_summary.empty:
@@ -2846,6 +3027,27 @@ class MainWindow(QMainWindow):
                 elements.append(Paragraph(f"• Сальдо на конец: {end_balance:,.2f} ₽", styles['Normal']))
                 elements.append(Spacer(1, 10))
 
+            # ===== ИТОГИ ОСВ 44 =====
+            osv_44_summary = self.current_df[self.current_df['doc_type'] == 'osv_44_summary']
+            if not osv_44_summary.empty:
+                elements.append(Paragraph("Итоги по счету 44 (Расходы на продажу):", subtitle_style))
+                for _, row in osv_44_summary.iterrows():
+                    total_expenses = row.get('sales_expenses', 0) or row.get('cost_price', 0)
+                    if total_expenses is None: total_expenses = 0
+                    elements.append(Paragraph(f"• Общая сумма расходов на продажу: {total_expenses:,.2f} ₽", styles['Normal']))
+                elements.append(Spacer(1, 10))
+
+            # Детальные записи ОСВ 44 (если есть статьи затрат)
+            osv_44_details = self.current_df[self.current_df['doc_type'] == 'osv_44']
+            if not osv_44_details.empty:
+                elements.append(Paragraph("Детализация расходов по статьям:", subtitle_style))
+                for _, row in osv_44_details.head(10).iterrows():  # первые 10 статей
+                    article = row.get('nomenclature', '')
+                    amount = row.get('sales_expenses', 0) or row.get('cost_price', 0)
+                    if amount is None: amount = 0
+                    if article and amount != 0:
+                        elements.append(Paragraph(f"• {article}: {amount:,.2f} ₽", styles['Normal']))
+                elements.append(Spacer(1, 10))
 
             # ===== ВСЕ 9 ГРАФИКОВ - ПО 2 НА СТРАНИЦУ =====
             if hasattr(self, 'chart_paths'):
@@ -3170,6 +3372,28 @@ class MainWindow(QMainWindow):
                 summary = osv_41_summary.iloc[0]
                 doc.add_paragraph(f"• Сальдо на начало: {summary.get('purchase_amount_with_vat', 0):,.2f} ₽")
                 # Здесь можно добавить другие итоги, если есть соответствующие колонки
+                doc.add_paragraph()
+
+            # ===== ИТОГИ ОСВ 44 =====
+            osv_44_summary = self.current_df[self.current_df['doc_type'] == 'osv_44_summary']
+            if not osv_44_summary.empty:
+                doc.add_heading('Итоги по счету 44 (Расходы на продажу):', level=2)
+                for _, row in osv_44_summary.iterrows():
+                    total_expenses = row.get('sales_expenses', 0) or row.get('cost_price', 0)
+                    if total_expenses is None: total_expenses = 0
+                    doc.add_paragraph(f"• Общая сумма расходов на продажу: {total_expenses:,.2f} ₽")
+                doc.add_paragraph()
+
+            # Детальные записи ОСВ 44
+            osv_44_details = self.current_df[self.current_df['doc_type'] == 'osv_44']
+            if not osv_44_details.empty:
+                doc.add_heading('Детализация расходов по статьям:', level=2)
+                for _, row in osv_44_details.head(10).iterrows():
+                    article = row.get('nomenclature', '')
+                    amount = row.get('sales_expenses', 0) or row.get('cost_price', 0)
+                    if amount is None: amount = 0
+                    if article and amount != 0:
+                        doc.add_paragraph(f"• {article}: {amount:,.2f} ₽")
                 doc.add_paragraph()
 
             # ===== ВСЕ 9 ГРАФИКОВ =====
@@ -3522,7 +3746,7 @@ class MainWindow(QMainWindow):
         
         # Текст о программе
         about_text = """<h2>Программа BuhTuundOtchet</h2>
-        <p><b>Версия программы:</b> v7.6.0</p>
+        <p><b>Версия программы:</b> v7.7.0</p>
         <p><b>Разработчик:</b> Deer Tuund (C) 2026</p>
         <p><b>Для связи:</b> vaspull9@gmail.com</p>
         <hr>
